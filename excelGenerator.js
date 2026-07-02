@@ -31,16 +31,21 @@ function refLabel(idx) {
   return `${Math.floor(idx / 7) + 1}${COL_LETTERS[idx % 7]}`;
 }
 
-// Deep-copy a cell's style onto another cell
-function copyStyle(srcCell, dstCell) {
+// Snapshot a cell's full style as a plain object (detached from the live cell)
+function snapStyle(cell) {
   try {
-    if (srcCell.font)      dstCell.font      = { ...srcCell.font };
-    if (srcCell.border)    dstCell.border    = JSON.parse(JSON.stringify(srcCell.border));
-    if (srcCell.fill)      dstCell.fill      = JSON.parse(JSON.stringify(srcCell.fill));
-    if (srcCell.alignment) dstCell.alignment = { ...srcCell.alignment };
-    if (srcCell.numFmt)    dstCell.numFmt    = srcCell.numFmt;
-  } catch (e) {
-    // silently skip style copy errors
+    return JSON.parse(JSON.stringify(cell.style || {}));
+  } catch {
+    return {};
+  }
+}
+
+// Replace a cell's entire style (clears anything the snapshot doesn't define)
+function applyStyle(dstCell, style) {
+  try {
+    dstCell.style = JSON.parse(JSON.stringify(style));
+  } catch {
+    // silently skip style errors
   }
 }
 
@@ -93,16 +98,18 @@ export async function generateExcel(employeeName, receipts) {
   const wsTWD = wb.getWorksheet('TWD');
 
   // ── Capture styles from reference rows BEFORE modifying anything ───────────
-  // Data row styles (row 8, cols 1-13)
+  // Snapshots must be detached plain objects: with 18+ receipts the data rows
+  // land on the template's own rows 25-32, so live cell references would be
+  // overwritten before the subtotal/bottom sections are written.
   const dataStyles = {};
   for (let c = 1; c <= 13; c++) {
-    dataStyles[c] = wsTWD.getCell(8, c);
+    dataStyles[c] = snapStyle(wsTWD.getCell(8, c));
   }
 
   // Subtotal row styles (row 25)
   const subtotalStyles = {};
   for (let c = 1; c <= 13; c++) {
-    subtotalStyles[c] = wsTWD.getCell(25, c);
+    subtotalStyles[c] = snapStyle(wsTWD.getCell(25, c));
   }
 
   // Bottom section styles (rows 26-32)
@@ -110,31 +117,48 @@ export async function generateExcel(employeeName, receipts) {
   for (const refRow of [26, 27, 28, 29, 30, 31, 32]) {
     bottomStyles[refRow] = {};
     for (let c = 1; c <= 13; c++) {
-      bottomStyles[refRow][c] = wsTWD.getCell(refRow, c);
+      bottomStyles[refRow][c] = snapStyle(wsTWD.getCell(refRow, c));
     }
   }
 
-  // ── Clear rows 8-50 ────────────────────────────────────────────────────────
-  for (let r = 8; r <= 50; r++) {
-    for (let c = 1; c <= 13; c++) {
-      wsTWD.getCell(r, c).value = null;
+  // ── Clear rows 8-60: values AND styles, so template formatting from the
+  //    original row positions doesn't bleed through at the new positions ──────
+  for (let r = 8; r <= 60; r++) {
+    for (let c = 1; c <= 20; c++) {
+      const cell = wsTWD.getCell(r, c);
+      cell.value = null;
+      cell.style = {};
     }
   }
 
   // ── Update employee name and period ───────────────────────────────────────
+  const slashDate = d => /^\d{4}-\d{2}-\d{2}/.test(d || '') ? d.substring(0, 10).replace(/-/g, '/') : (d || '');
   wsTWD.getCell(5, 2).value = employeeName || 'Samuel Chiang';
-  wsTWD.getCell(5, 10).value = `${firstDate}-${lastDate}`;
+  wsTWD.getCell(5, 10).value = `${slashDate(firstDate)}-${slashDate(lastDate)}`;
 
   // ── Write data rows ────────────────────────────────────────────────────────
   sorted.forEach((r, i) => {
     const row = DATA_START + i;
     for (let c = 1; c <= 13; c++) {
-      copyStyle(dataStyles[c], wsTWD.getCell(row, c));
+      applyStyle(wsTWD.getCell(row, c), dataStyles[c]);
     }
     wsTWD.getRow(row).height = 18.75;
 
-    wsTWD.getCell(row, 1).value = r.date;
-    wsTWD.getCell(row, 2).value = r.description || r.merchant || '';
+    // Real date value + m/d/yy format (matches the reference layout, e.g. 4/14/26)
+    const dateCell = wsTWD.getCell(row, 1);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(r.date || '')) {
+      const [y, mo, d] = r.date.split('-').map(Number);
+      dateCell.value = new Date(Date.UTC(y, mo - 1, d));
+      dateCell.numFmt = 'm/d/yy';
+    } else {
+      dateCell.value = r.date || '';
+    }
+
+    // Explanation: "merchant - description" like the reference layout
+    const merchant = (r.merchant || '').trim();
+    const desc = (r.description || '').trim();
+    wsTWD.getCell(row, 2).value =
+      merchant && desc && desc !== merchant ? `${merchant} - ${desc}` : (desc || merchant);
     wsTWD.getCell(row, 3).value = r.ref;
     wsTWD.getCell(row, 4).value = { formula: `SUM(E${row}:M${row})` };
     const catCol = CATEGORY_COL[r.category] || 13;
@@ -143,7 +167,7 @@ export async function generateExcel(employeeName, receipts) {
 
   // ── Write subtotal row ─────────────────────────────────────────────────────
   for (let c = 1; c <= 13; c++) {
-    copyStyle(subtotalStyles[c], wsTWD.getCell(SUBTOTAL, c));
+    applyStyle(wsTWD.getCell(SUBTOTAL, c), subtotalStyles[c]);
   }
   wsTWD.getRow(SUBTOTAL).height = 18.75;
   wsTWD.getCell(SUBTOTAL, 3).value = 'total';
@@ -167,7 +191,7 @@ export async function generateExcel(employeeName, receipts) {
   for (const [newRowStr, refRow] of Object.entries(bottomMap)) {
     const nr = parseInt(newRowStr);
     for (let c = 1; c <= 13; c++) {
-      copyStyle(bottomStyles[refRow][c], wsTWD.getCell(nr, c));
+      applyStyle(wsTWD.getCell(nr, c), bottomStyles[refRow][c]);
     }
     wsTWD.getRow(nr).height = undefined; // auto-height
   }
