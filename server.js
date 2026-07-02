@@ -26,6 +26,8 @@ function isImage(filename) {
   return IMAGE_EXTS.has(path.extname(filename).toLowerCase());
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 // ─── ROC date converter ───────────────────────────────────────────────────────
 function convertRocToWestern(dateStr) {
   if (!dateStr) return null;
@@ -43,8 +45,8 @@ function convertRocToWestern(dateStr) {
   return dateStr;
 }
 
-// ─── LLM vision: parse one receipt image ─────────────────────────────────────
-async function parseReceiptWithLLM(imageBase64, mimeType = 'image/jpeg') {
+// ─── LLM vision: parse one receipt image (with retry + exponential backoff) ───
+async function parseReceiptWithLLM(imageBase64, mimeType = 'image/jpeg', retries = 4) {
   const apiUrl = (process.env.FORGE_API_URL || 'https://api.openai.com').replace(/\/$/, '');
   const apiKey = process.env.FORGE_API_KEY || process.env.OPENAI_API_KEY;
 
@@ -69,26 +71,42 @@ Category rules:
 - Entertainment: client entertainment, events
 - Others: anything else`;
 
-  const response = await axios.post(
-    `${apiUrl}/v1/chat/completions`,
-    {
-      model: 'gpt-4o',
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' } },
-          { type: 'text', text: prompt }
-        ]
-      }],
-      max_tokens: 300,
-      temperature: 0
-    },
-    { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } }
-  );
-
-  const content = response.data.choices[0].message.content.trim();
-  const cleaned = content.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-  return JSON.parse(cleaned);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await axios.post(
+        `${apiUrl}/v1/chat/completions`,
+        {
+          model: 'gpt-4o',
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' } },
+              { type: 'text', text: prompt }
+            ]
+          }],
+          max_tokens: 300,
+          temperature: 0
+        },
+        {
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          timeout: 30000
+        }
+      );
+      const content = response.data.choices[0].message.content.trim();
+      const cleaned = content.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+      return JSON.parse(cleaned);
+    } catch (err) {
+      const status = err.response?.status;
+      // Retry on rate limit (429), server error (500/503), or timeout
+      if ((status === 429 || status === 500 || status === 503 || err.code === 'ECONNABORTED') && attempt < retries) {
+        const wait = attempt * 10000; // 10s, 20s, 30s
+        console.warn(`Attempt ${attempt}/${retries} failed (${status || err.code}) for image, retrying in ${wait/1000}s...`);
+        await sleep(wait);
+      } else {
+        throw err;
+      }
+    }
+  }
 }
 
 // ─── POST /api/parse ──────────────────────────────────────────────────────────
@@ -137,42 +155,41 @@ app.post('/api/parse', upload.array('files', 200), async (req, res) => {
 
     console.log(`Processing ${images.length} receipt image(s) from ${req.files.length} uploaded file(s)`);
 
-    // Parse each image with LLM (in parallel, max 5 at a time to avoid rate limits)
+    // Parse each image sequentially with a delay between calls to avoid rate limits
     const results = [];
-    const BATCH = 5;
-    for (let i = 0; i < images.length; i += BATCH) {
-      const batch = images.slice(i, i + BATCH);
-      const batchResults = await Promise.all(batch.map(async (img) => {
-        try {
-          const b64 = img.buffer.toString('base64');
-          const parsed = await parseReceiptWithLLM(b64, img.mimeType);
-          const westernDate = convertRocToWestern(parsed.date);
-          return {
-            id: uuidv4(),
-            filename: img.name,
-            imageBase64: b64,
-            date: westernDate || parsed.date,
-            amount: parsed.amount,
-            merchant: parsed.merchant,
-            category: parsed.category || 'Others',
-            description: parsed.description || parsed.merchant
-          };
-        } catch (e) {
-          console.error(`Failed to parse ${img.name}:`, e.message);
-          return {
-            id: uuidv4(),
-            filename: img.name,
-            imageBase64: img.buffer.toString('base64'),
-            date: '',
-            amount: 0,
-            merchant: img.name,
-            category: 'Others',
-            description: 'Parse failed – please fill manually',
-            error: e.message
-          };
-        }
-      }));
-      results.push(...batchResults);
+    for (let i = 0; i < images.length; i++) {
+      const img = images[i];
+      console.log(`Parsing ${i + 1}/${images.length}: ${img.name}`);
+      try {
+        const b64 = img.buffer.toString('base64');
+        const parsed = await parseReceiptWithLLM(b64, img.mimeType);
+        const westernDate = convertRocToWestern(parsed.date);
+        results.push({
+          id: uuidv4(),
+          filename: img.name,
+          imageBase64: b64,
+          date: westernDate || parsed.date,
+          amount: parsed.amount,
+          merchant: parsed.merchant,
+          category: parsed.category || 'Others',
+          description: parsed.description || parsed.merchant
+        });
+      } catch (e) {
+        console.error(`Failed to parse ${img.name}:`, e.message);
+        results.push({
+          id: uuidv4(),
+          filename: img.name,
+          imageBase64: img.buffer.toString('base64'),
+          date: '',
+          amount: 0,
+          merchant: img.name,
+          category: 'Others',
+          description: 'Parse failed – please fill manually',
+          error: e.message
+        });
+      }
+      // 2s delay between requests to stay within rate limits
+      if (i < images.length - 1) await sleep(2000);
     }
 
     // Sort chronologically
