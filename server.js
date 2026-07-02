@@ -22,8 +22,18 @@ const upload = multer({
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']);
 
+const MIME_BY_EXT = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+  '.webp': 'image/webp', '.gif': 'image/gif', '.bmp': 'image/bmp',
+  '.tiff': 'image/tiff', '.tif': 'image/tiff'
+};
+
 function isImage(filename) {
   return IMAGE_EXTS.has(path.extname(filename).toLowerCase());
+}
+
+function mimeFor(filename) {
+  return MIME_BY_EXT[path.extname(filename).toLowerCase()] || 'image/jpeg';
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -49,6 +59,7 @@ function convertRocToWestern(dateStr) {
 async function parseReceiptWithLLM(imageBase64, mimeType = 'image/jpeg', retries = 3) {
   const apiUrl = (process.env.FORGE_API_URL || 'https://api.openai.com').replace(/\/$/, '');
   const apiKey = process.env.FORGE_API_KEY || process.env.OPENAI_API_KEY;
+  const model = process.env.FORGE_MODEL || 'gpt-5.4';
 
   const prompt = `You are an expert at reading Taiwan receipts (both traditional Chinese and English).
 Analyze this receipt image and extract the following information.
@@ -76,7 +87,7 @@ Category rules:
       const response = await axios.post(
         `${apiUrl}/v1/chat/completions`,
         {
-          model: 'gpt-5.4',
+          model,
           messages: [{
             role: 'user',
             content: [
@@ -84,12 +95,13 @@ Category rules:
               { type: 'text', text: prompt }
             ]
           }],
-          max_tokens: 300,
-          temperature: 0
+          // GPT-5-family models reject `max_tokens` and non-default `temperature`;
+          // reasoning tokens also count toward the completion limit, so keep headroom.
+          max_completion_tokens: 2000
         },
         {
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          timeout: 30000
+          timeout: 60000
         }
       );
       const content = response.data.choices[0].message.content.trim();
@@ -98,10 +110,14 @@ Category rules:
     } catch (err) {
       const status = err.response?.status;
       if ((status === 429 || status === 500 || status === 503 || err.code === 'ECONNABORTED') && attempt < retries) {
-        const wait = attempt * 8000; // 8s, 16s
+        const retryAfter = Number(err.response?.headers?.['retry-after']);
+        const wait = retryAfter > 0 ? retryAfter * 1000 : attempt * 10000;
         console.warn(`Attempt ${attempt}/${retries} failed (${status || err.code}), retrying in ${wait/1000}s...`);
         await sleep(wait);
       } else {
+        // Surface the API's actual error message, not just "status code NNN"
+        const apiMsg = err.response?.data?.error?.message;
+        if (apiMsg) err.message = `${apiMsg} (HTTP ${status})`;
         throw err;
       }
     }
@@ -130,7 +146,7 @@ app.post('/api/parse', upload.array('files', 200), async (req, res) => {
             images.push({
               name: entry.entryName,
               buffer: entry.getData(),
-              mimeType: 'image/jpeg'
+              mimeType: mimeFor(entry.entryName)
             });
           }
         }
@@ -149,9 +165,9 @@ app.post('/api/parse', upload.array('files', 200), async (req, res) => {
 
     console.log(`Processing ${images.length} receipt image(s) from ${req.files.length} uploaded file(s)`);
 
-    // Parse images in parallel batches of 5
+    // Parse images in small parallel batches to stay under API rate limits
     const results = [];
-    const BATCH = 5;
+    const BATCH = Number(process.env.PARSE_CONCURRENCY) || 3;
     for (let i = 0; i < images.length; i += BATCH) {
       const batch = images.slice(i, i + BATCH);
       console.log(`Parsing batch ${Math.floor(i/BATCH)+1}: images ${i+1}–${Math.min(i+BATCH, images.length)}/${images.length}`);

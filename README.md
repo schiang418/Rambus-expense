@@ -17,6 +17,8 @@ A web app that parses receipt images (JPEG or ZIP) using AI vision, lets you rev
 |---|---|
 | `FORGE_API_URL` | OpenAI-compatible API base URL (e.g. `https://api.openai.com`) |
 | `FORGE_API_KEY` | API key for the LLM vision model |
+| `FORGE_MODEL` | Vision model to use (default: `gpt-5.4`) |
+| `PARSE_CONCURRENCY` | Receipts parsed in parallel (default: 3; lower it if you hit 429 rate limits) |
 | `PORT` | Server port (Railway sets this automatically) |
 
 ## Railway Deployment
