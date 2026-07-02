@@ -46,7 +46,7 @@ function convertRocToWestern(dateStr) {
 }
 
 // ─── LLM vision: parse one receipt image (with retry + exponential backoff) ───
-async function parseReceiptWithLLM(imageBase64, mimeType = 'image/jpeg', retries = 4) {
+async function parseReceiptWithLLM(imageBase64, mimeType = 'image/jpeg', retries = 3) {
   const apiUrl = (process.env.FORGE_API_URL || 'https://api.openai.com').replace(/\/$/, '');
   const apiKey = process.env.FORGE_API_KEY || process.env.OPENAI_API_KEY;
 
@@ -76,7 +76,7 @@ Category rules:
       const response = await axios.post(
         `${apiUrl}/v1/chat/completions`,
         {
-          model: 'gpt-4o',
+          model: 'gpt-5.4',
           messages: [{
             role: 'user',
             content: [
@@ -97,10 +97,9 @@ Category rules:
       return JSON.parse(cleaned);
     } catch (err) {
       const status = err.response?.status;
-      // Retry on rate limit (429), server error (500/503), or timeout
       if ((status === 429 || status === 500 || status === 503 || err.code === 'ECONNABORTED') && attempt < retries) {
-        const wait = attempt * 10000; // 10s, 20s, 30s
-        console.warn(`Attempt ${attempt}/${retries} failed (${status || err.code}) for image, retrying in ${wait/1000}s...`);
+        const wait = attempt * 8000; // 8s, 16s
+        console.warn(`Attempt ${attempt}/${retries} failed (${status || err.code}), retrying in ${wait/1000}s...`);
         await sleep(wait);
       } else {
         throw err;
@@ -110,8 +109,6 @@ Category rules:
 }
 
 // ─── POST /api/parse ──────────────────────────────────────────────────────────
-// Accepts: multipart with field "files" (multiple ZIPs and/or images)
-// Returns: JSON array of parsed receipt entries
 app.post('/api/parse', upload.array('files', 200), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
@@ -119,17 +116,15 @@ app.post('/api/parse', upload.array('files', 200), async (req, res) => {
     }
 
     // Collect all images from every uploaded file
-    const images = [];  // { name, buffer, mimeType }
+    const images = [];
 
     for (const file of req.files) {
       const ext = path.extname(file.originalname).toLowerCase();
 
       if (ext === '.zip') {
-        // Extract all images from the ZIP
         const zip = new AdmZip(file.buffer);
         for (const entry of zip.getEntries()) {
           if (!entry.isDirectory && isImage(entry.entryName)) {
-            // Skip macOS metadata files
             const baseName = path.basename(entry.entryName);
             if (baseName.startsWith('._') || baseName.startsWith('.')) continue;
             images.push({
@@ -146,7 +141,6 @@ app.post('/api/parse', upload.array('files', 200), async (req, res) => {
           mimeType: file.mimetype || 'image/jpeg'
         });
       }
-      // Silently skip unsupported file types
     }
 
     if (images.length === 0) {
@@ -155,41 +149,45 @@ app.post('/api/parse', upload.array('files', 200), async (req, res) => {
 
     console.log(`Processing ${images.length} receipt image(s) from ${req.files.length} uploaded file(s)`);
 
-    // Parse each image sequentially with a delay between calls to avoid rate limits
+    // Parse images in parallel batches of 5
     const results = [];
-    for (let i = 0; i < images.length; i++) {
-      const img = images[i];
-      console.log(`Parsing ${i + 1}/${images.length}: ${img.name}`);
-      try {
-        const b64 = img.buffer.toString('base64');
-        const parsed = await parseReceiptWithLLM(b64, img.mimeType);
-        const westernDate = convertRocToWestern(parsed.date);
-        results.push({
-          id: uuidv4(),
-          filename: img.name,
-          imageBase64: b64,
-          date: westernDate || parsed.date,
-          amount: parsed.amount,
-          merchant: parsed.merchant,
-          category: parsed.category || 'Others',
-          description: parsed.description || parsed.merchant
-        });
-      } catch (e) {
-        console.error(`Failed to parse ${img.name}:`, e.message);
-        results.push({
-          id: uuidv4(),
-          filename: img.name,
-          imageBase64: img.buffer.toString('base64'),
-          date: '',
-          amount: 0,
-          merchant: img.name,
-          category: 'Others',
-          description: 'Parse failed – please fill manually',
-          error: e.message
-        });
-      }
-      // 2s delay between requests to stay within rate limits
-      if (i < images.length - 1) await sleep(2000);
+    const BATCH = 5;
+    for (let i = 0; i < images.length; i += BATCH) {
+      const batch = images.slice(i, i + BATCH);
+      console.log(`Parsing batch ${Math.floor(i/BATCH)+1}: images ${i+1}–${Math.min(i+BATCH, images.length)}/${images.length}`);
+      const batchResults = await Promise.all(batch.map(async (img) => {
+        try {
+          const b64 = img.buffer.toString('base64');
+          const parsed = await parseReceiptWithLLM(b64, img.mimeType);
+          const westernDate = convertRocToWestern(parsed.date);
+          return {
+            id: uuidv4(),
+            filename: img.name,
+            imageBase64: b64,
+            date: westernDate || parsed.date,
+            amount: parsed.amount,
+            merchant: parsed.merchant,
+            category: parsed.category || 'Others',
+            description: parsed.description || parsed.merchant
+          };
+        } catch (e) {
+          console.error(`Failed to parse ${img.name}: [${e.response?.status}] ${e.response?.data ? JSON.stringify(e.response.data) : e.message}`);
+          return {
+            id: uuidv4(),
+            filename: img.name,
+            imageBase64: img.buffer.toString('base64'),
+            date: '',
+            amount: 0,
+            merchant: img.name,
+            category: 'Others',
+            description: 'Parse failed – please fill manually',
+            error: e.message
+          };
+        }
+      }));
+      results.push(...batchResults);
+      // Small pause between batches
+      if (i + BATCH < images.length) await sleep(1000);
     }
 
     // Sort chronologically
