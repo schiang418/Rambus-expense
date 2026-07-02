@@ -232,8 +232,11 @@ app.post('/api/generate', async (req, res) => {
     const excelBuffer = await generateExcel(employeeName || 'Samuel Chiang', receipts);
 
     const sorted = [...receipts].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-    const period = `${sorted[0]?.date || 'unknown'}_to_${sorted[sorted.length-1]?.date || 'unknown'}`;
-    const filename = `Expense_Report_${period}.xlsx`;
+    // Dates may still contain non-ASCII (e.g. unconverted ROC dates like 115年04月14日),
+    // which is illegal in a Content-Disposition header — keep only YYYY-MM-DD-shaped dates.
+    const safeDate = d => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}/.test(d)) ? d.substring(0, 10) : 'unknown';
+    const period = `${safeDate(sorted[0]?.date)}_to_${safeDate(sorted[sorted.length-1]?.date)}`;
+    const filename = `Expense_Report_${period}.xlsx`.replace(/[^\w.\-]/g, '_');
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
