@@ -42,16 +42,25 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 function convertRocToWestern(dateStr) {
   if (!dateStr) return null;
   if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) return dateStr.substring(0, 10);
-  let m = dateStr.match(/(\d+)年(\d{1,2})-\d{1,2}月/);
-  if (m) return `${+m[1]+1911}-${String(+m[2]).padStart(2,'0')}-01`;
+  // Years > 1000 are already western (receipts sometimes print 2026/06/16) — only
+  // small years are ROC and need +1911
+  const yr = y => (+y > 1000 ? +y : +y + 1911);
+  const pad = n => String(+n).padStart(2, '0');
+  let m = dateStr.match(/(\d+)年(\d{1,2})-\d{1,2}月/);           // 115年03-04月 (billing range)
+  if (m) return `${yr(m[1])}-${pad(m[2])}-01`;
+  m = dateStr.match(/(\d+)年(\d{1,2})月(\d{1,2})[日號]?/);        // 115年04月28日
+  if (m) return `${yr(m[1])}-${pad(m[2])}-${pad(m[3])}`;
+  m = dateStr.match(/(\d+)年(\d{1,2})月/);                        // 115年04月 (day unknown)
+  if (m) return `${yr(m[1])}-${pad(m[2])}-01`;
   const CN = {零:0,一:1,二:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10,廿:20,卅:30};
   m = dateStr.match(/(\d+)年([一二三四五六七八九十廿卅]+)月([一二三四五六七八九十廿卅]+)[號日]/);
   if (m) {
-    const cn2int = s => [...s].reduce((v,c) => v*10 + (CN[c]||0), 0);
-    return `${+m[1]+1911}-${String(cn2int(m[2])).padStart(2,'0')}-${String(cn2int(m[3])).padStart(2,'0')}`;
+    // 十/廿/卅 are bases: 廿八 = 20+8, 十五 = 10+5, 四 = 4
+    const cn2int = s => [...s].reduce((v, c) => (CN[c] >= 10 ? v + CN[c] : v + (CN[c] || 0)), 0);
+    return `${yr(m[1])}-${pad(cn2int(m[2]))}-${pad(cn2int(m[3]))}`;
   }
-  m = dateStr.match(/(\d+)\/(\d{1,2})\/(\d{1,2})/);
-  if (m) return `${+m[1]+1911}-${String(+m[2]).padStart(2,'0')}-${String(+m[3]).padStart(2,'0')}`;
+  m = dateStr.match(/(\d+)\/(\d{1,2})\/(\d{1,2})/);               // 115/4/28 or 2026/06/16
+  if (m) return `${yr(m[1])}-${pad(m[2])}-${pad(m[3])}`;
   return dateStr;
 }
 
