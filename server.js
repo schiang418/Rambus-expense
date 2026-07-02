@@ -3,7 +3,6 @@ import multer from 'multer';
 import AdmZip from 'adm-zip';
 import axios from 'axios';
 import path from 'path';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import { generateExcel } from './excelGenerator.js';
@@ -12,28 +11,33 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Multer: store uploads in memory
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
+// Multer: accept multiple files, store in memory
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 }   // 100 MB per file
+});
+
+const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif']);
+
+function isImage(filename) {
+  return IMAGE_EXTS.has(path.extname(filename).toLowerCase());
+}
 
 // ─── ROC date converter ───────────────────────────────────────────────────────
 function convertRocToWestern(dateStr) {
   if (!dateStr) return null;
-  // Already western YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) return dateStr.substring(0, 10);
-  // 115年03-04月 → first month, day 1
   let m = dateStr.match(/(\d+)年(\d{1,2})-\d{1,2}月/);
   if (m) return `${+m[1]+1911}-${String(+m[2]).padStart(2,'0')}-01`;
-  // 115年五月六號 (Chinese numerals)
   const CN = {零:0,一:1,二:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9,十:10,廿:20,卅:30};
   m = dateStr.match(/(\d+)年([一二三四五六七八九十廿卅]+)月([一二三四五六七八九十廿卅]+)[號日]/);
   if (m) {
     const cn2int = s => [...s].reduce((v,c) => v*10 + (CN[c]||0), 0);
     return `${+m[1]+1911}-${String(cn2int(m[2])).padStart(2,'0')}-${String(cn2int(m[3])).padStart(2,'0')}`;
   }
-  // 115/5/6
   m = dateStr.match(/(\d+)\/(\d{1,2})\/(\d{1,2})/);
   if (m) return `${+m[1]+1911}-${String(+m[2]).padStart(2,'0')}-${String(+m[3]).padStart(2,'0')}`;
   return dateStr;
@@ -41,7 +45,7 @@ function convertRocToWestern(dateStr) {
 
 // ─── LLM vision: parse one receipt image ─────────────────────────────────────
 async function parseReceiptWithLLM(imageBase64, mimeType = 'image/jpeg') {
-  const apiUrl = process.env.FORGE_API_URL || 'https://api.openai.com';
+  const apiUrl = (process.env.FORGE_API_URL || 'https://api.openai.com').replace(/\/$/, '');
   const apiKey = process.env.FORGE_API_KEY || process.env.OPENAI_API_KEY;
 
   const prompt = `You are an expert at reading Taiwan receipts (both traditional Chinese and English).
@@ -69,15 +73,13 @@ Category rules:
     `${apiUrl}/v1/chat/completions`,
     {
       model: 'gpt-4o',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' } },
-            { type: 'text', text: prompt }
-          ]
-        }
-      ],
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}`, detail: 'high' } },
+          { type: 'text', text: prompt }
+        ]
+      }],
       max_tokens: 300,
       temperature: 0
     },
@@ -85,66 +87,92 @@ Category rules:
   );
 
   const content = response.data.choices[0].message.content.trim();
-  // Strip markdown code fences if present
   const cleaned = content.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
   return JSON.parse(cleaned);
 }
 
 // ─── POST /api/parse ──────────────────────────────────────────────────────────
-// Accepts: multipart with field "file" (ZIP or multiple JPEGs)
+// Accepts: multipart with field "files" (multiple ZIPs and/or images)
 // Returns: JSON array of parsed receipt entries
-app.post('/api/parse', upload.single('file'), async (req, res) => {
+app.post('/api/parse', upload.array('files', 200), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-
-    const images = []; // { name, buffer, mimeType }
-
-    if (req.file.originalname.toLowerCase().endsWith('.zip')) {
-      const zip = new AdmZip(req.file.buffer);
-      for (const entry of zip.getEntries()) {
-        const name = entry.entryName.toLowerCase();
-        if (!entry.isDirectory && (name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png'))) {
-          images.push({ name: entry.entryName, buffer: entry.getData(), mimeType: 'image/jpeg' });
-        }
-      }
-    } else {
-      images.push({ name: req.file.originalname, buffer: req.file.buffer, mimeType: req.file.mimetype });
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    if (images.length === 0) return res.status(400).json({ error: 'No receipt images found in upload' });
+    // Collect all images from every uploaded file
+    const images = [];  // { name, buffer, mimeType }
 
-    // Parse each image with LLM
-    const results = [];
-    for (const img of images) {
-      try {
-        const b64 = img.buffer.toString('base64');
-        const parsed = await parseReceiptWithLLM(b64, img.mimeType);
-        // Convert ROC date
-        const westernDate = convertRocToWestern(parsed.date);
-        results.push({
-          id: uuidv4(),
-          filename: img.name,
-          imageBase64: b64,
-          date: westernDate || parsed.date,
-          amount: parsed.amount,
-          merchant: parsed.merchant,
-          category: parsed.category || 'Others',
-          description: parsed.description || parsed.merchant
-        });
-      } catch (e) {
-        console.error(`Failed to parse ${img.name}:`, e.message);
-        results.push({
-          id: uuidv4(),
-          filename: img.name,
-          imageBase64: img.buffer.toString('base64'),
-          date: '',
-          amount: 0,
-          merchant: img.name,
-          category: 'Others',
-          description: 'Parse failed – please fill manually',
-          error: e.message
+    for (const file of req.files) {
+      const ext = path.extname(file.originalname).toLowerCase();
+
+      if (ext === '.zip') {
+        // Extract all images from the ZIP
+        const zip = new AdmZip(file.buffer);
+        for (const entry of zip.getEntries()) {
+          if (!entry.isDirectory && isImage(entry.entryName)) {
+            // Skip macOS metadata files
+            const baseName = path.basename(entry.entryName);
+            if (baseName.startsWith('._') || baseName.startsWith('.')) continue;
+            images.push({
+              name: entry.entryName,
+              buffer: entry.getData(),
+              mimeType: 'image/jpeg'
+            });
+          }
+        }
+      } else if (isImage(file.originalname)) {
+        images.push({
+          name: file.originalname,
+          buffer: file.buffer,
+          mimeType: file.mimetype || 'image/jpeg'
         });
       }
+      // Silently skip unsupported file types
+    }
+
+    if (images.length === 0) {
+      return res.status(400).json({ error: 'No receipt images found in the uploaded files' });
+    }
+
+    console.log(`Processing ${images.length} receipt image(s) from ${req.files.length} uploaded file(s)`);
+
+    // Parse each image with LLM (in parallel, max 5 at a time to avoid rate limits)
+    const results = [];
+    const BATCH = 5;
+    for (let i = 0; i < images.length; i += BATCH) {
+      const batch = images.slice(i, i + BATCH);
+      const batchResults = await Promise.all(batch.map(async (img) => {
+        try {
+          const b64 = img.buffer.toString('base64');
+          const parsed = await parseReceiptWithLLM(b64, img.mimeType);
+          const westernDate = convertRocToWestern(parsed.date);
+          return {
+            id: uuidv4(),
+            filename: img.name,
+            imageBase64: b64,
+            date: westernDate || parsed.date,
+            amount: parsed.amount,
+            merchant: parsed.merchant,
+            category: parsed.category || 'Others',
+            description: parsed.description || parsed.merchant
+          };
+        } catch (e) {
+          console.error(`Failed to parse ${img.name}:`, e.message);
+          return {
+            id: uuidv4(),
+            filename: img.name,
+            imageBase64: img.buffer.toString('base64'),
+            date: '',
+            amount: 0,
+            merchant: img.name,
+            category: 'Others',
+            description: 'Parse failed – please fill manually',
+            error: e.message
+          };
+        }
+      }));
+      results.push(...batchResults);
     }
 
     // Sort chronologically
@@ -154,7 +182,8 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
       return a.date.localeCompare(b.date);
     });
 
-    res.json({ receipts: results });
+    console.log(`Done: ${results.length} receipts parsed`);
+    res.json({ receipts: results, totalFiles: req.files.length, totalImages: images.length });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
@@ -162,17 +191,17 @@ app.post('/api/parse', upload.single('file'), async (req, res) => {
 });
 
 // ─── POST /api/generate ───────────────────────────────────────────────────────
-// Accepts: JSON { employeeName, receipts: [...] }
-// Returns: Excel file download
-app.post('/api/generate', express.json({ limit: '50mb' }), async (req, res) => {
+app.post('/api/generate', async (req, res) => {
   try {
     const { employeeName, receipts } = req.body;
-    if (!receipts || receipts.length === 0) return res.status(400).json({ error: 'No receipts provided' });
+    if (!receipts || receipts.length === 0) {
+      return res.status(400).json({ error: 'No receipts provided' });
+    }
 
     const excelBuffer = await generateExcel(employeeName || 'Samuel Chiang', receipts);
 
-    const sorted = [...receipts].sort((a,b) => a.date.localeCompare(b.date));
-    const period = `${sorted[0].date}_to_${sorted[sorted.length-1].date}`;
+    const sorted = [...receipts].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    const period = `${sorted[0]?.date || 'unknown'}_to_${sorted[sorted.length-1]?.date || 'unknown'}`;
     const filename = `Expense_Report_${period}.xlsx`;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

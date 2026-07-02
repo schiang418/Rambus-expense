@@ -14,7 +14,6 @@
       min-height: 100vh;
     }
 
-    /* ── Header ── */
     header {
       background: #1a1a2e;
       color: #fff;
@@ -28,10 +27,8 @@
     header .logo { font-size: 1.25rem; font-weight: 700; letter-spacing: .5px; }
     header .sub  { font-size: .85rem; color: #a0aec0; }
 
-    /* ── Main layout ── */
-    main { max-width: 1100px; margin: 2rem auto; padding: 0 1.5rem; }
+    main { max-width: 1150px; margin: 2rem auto; padding: 0 1.5rem; }
 
-    /* ── Card ── */
     .card {
       background: #fff;
       border-radius: 12px;
@@ -41,22 +38,38 @@
     }
     .card h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 1.25rem; color: #2d3748; }
 
-    /* ── Drop zone ── */
+    /* Drop zone */
     #dropzone {
       border: 2.5px dashed #cbd5e0;
       border-radius: 10px;
-      padding: 3rem 2rem;
+      padding: 2.5rem 2rem;
       text-align: center;
       cursor: pointer;
       transition: border-color .2s, background .2s;
+      position: relative;
     }
     #dropzone.over { border-color: #4299e8; background: #ebf8ff; }
-    #dropzone svg  { width: 48px; height: 48px; color: #a0aec0; margin-bottom: .75rem; }
-    #dropzone p    { color: #718096; font-size: .95rem; }
-    #dropzone strong { color: #4299e8; }
+    #dropzone svg  { width: 44px; height: 44px; color: #a0aec0; margin-bottom: .6rem; }
+    #dropzone .dz-title { font-size: 1rem; color: #4a5568; font-weight: 500; }
+    #dropzone .dz-sub   { font-size: .82rem; color: #a0aec0; margin-top: .3rem; }
+    #dropzone strong    { color: #4299e8; }
     #fileInput { display: none; }
 
-    /* ── Employee name ── */
+    /* File list */
+    #fileList { margin-top: 1rem; display: flex; flex-wrap: wrap; gap: .5rem; }
+    .file-chip {
+      display: inline-flex; align-items: center; gap: .4rem;
+      background: #edf2f7; border-radius: 6px; padding: .3rem .7rem;
+      font-size: .82rem; color: #2d3748;
+    }
+    .file-chip .chip-icon { font-size: .9rem; }
+    .file-chip .chip-remove {
+      cursor: pointer; color: #a0aec0; font-size: .85rem; line-height: 1;
+      background: none; border: none; padding: 0 0 0 .2rem;
+    }
+    .file-chip .chip-remove:hover { color: #e53e3e; }
+
+    /* Field row */
     .field-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
     .field-row label { font-weight: 500; white-space: nowrap; min-width: 140px; }
     .field-row input {
@@ -65,33 +78,42 @@
     }
     .field-row input:focus { outline: none; border-color: #4299e8; }
 
-    /* ── Buttons ── */
+    /* Buttons */
     .btn {
       display: inline-flex; align-items: center; gap: .5rem;
       padding: .6rem 1.4rem; border-radius: 8px; font-size: .95rem;
       font-weight: 600; cursor: pointer; border: none; transition: all .15s;
     }
     .btn:active { transform: scale(.97); }
-    .btn-primary { background: #4299e8; color: #fff; }
-    .btn-primary:hover { background: #3182ce; }
-    .btn-primary:disabled { background: #a0aec0; cursor: not-allowed; transform: none; }
-    .btn-success { background: #38a169; color: #fff; }
-    .btn-success:hover { background: #2f855a; }
-    .btn-success:disabled { background: #a0aec0; cursor: not-allowed; transform: none; }
-    .btn-sm { padding: .35rem .8rem; font-size: .82rem; font-weight: 500; }
+    .btn-primary  { background: #4299e8; color: #fff; }
+    .btn-primary:hover  { background: #3182ce; }
+    .btn-primary:disabled  { background: #a0aec0; cursor: not-allowed; transform: none; }
+    .btn-success  { background: #38a169; color: #fff; }
+    .btn-success:hover  { background: #2f855a; }
+    .btn-success:disabled  { background: #a0aec0; cursor: not-allowed; transform: none; }
+    .btn-outline  { background: transparent; border: 1.5px solid #cbd5e0; color: #4a5568; }
+    .btn-outline:hover  { background: #edf2f7; }
+    .btn-sm   { padding: .35rem .8rem; font-size: .82rem; font-weight: 500; }
     .btn-danger { background: #fc8181; color: #fff; }
     .btn-danger:hover { background: #e53e3e; }
 
-    /* ── Progress ── */
+    /* Upload action row */
+    .upload-actions { display: flex; gap: .75rem; align-items: center; margin-top: 1rem; flex-wrap: wrap; }
+    .upload-actions .count-badge {
+      background: #ebf8ff; color: #2b6cb0; border-radius: 6px;
+      padding: .3rem .75rem; font-size: .85rem; font-weight: 600;
+    }
+
+    /* Progress */
     #progress {
       display: none; margin-top: 1rem;
       background: #ebf8ff; border-radius: 8px; padding: 1rem 1.25rem;
       font-size: .9rem; color: #2b6cb0;
     }
     #progress .bar-wrap { background: #bee3f8; border-radius: 99px; height: 6px; margin-top: .5rem; overflow: hidden; }
-    #progress .bar { background: #4299e8; height: 100%; border-radius: 99px; transition: width .3s; }
+    #progress .bar { background: #4299e8; height: 100%; border-radius: 99px; transition: width .4s; }
 
-    /* ── Table ── */
+    /* Table */
     #tableSection { display: none; }
     .table-scroll { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; font-size: .88rem; }
@@ -111,12 +133,10 @@
       display: inline-block; background: #ebf8ff; color: #2b6cb0;
       border-radius: 5px; padding: .15rem .5rem; font-weight: 700; font-size: .82rem;
     }
-
-    /* ── Actions row ── */
     .actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: 1.25rem; }
     .actions .spacer { flex: 1; }
 
-    /* ── Image modal ── */
+    /* Modal */
     #modal {
       display: none; position: fixed; inset: 0;
       background: rgba(0,0,0,.75); z-index: 999;
@@ -131,7 +151,7 @@
       display: flex; align-items: center; justify-content: center;
     }
 
-    /* ── Toast ── */
+    /* Toast */
     #toast {
       position: fixed; bottom: 2rem; right: 2rem;
       background: #2d3748; color: #fff; padding: .75rem 1.25rem;
@@ -141,7 +161,15 @@
     #toast.show { opacity: 1; }
 
     .error-row td { background: #fff5f5 !important; }
-    .error-badge { color: #e53e3e; font-size: .78rem; }
+    .error-badge { color: #e53e3e; font-size: .78rem; display: block; }
+
+    .summary-bar {
+      background: #f0fff4; border: 1px solid #9ae6b4;
+      border-radius: 8px; padding: .75rem 1.25rem;
+      font-size: .9rem; color: #276749; margin-bottom: 1rem;
+      display: flex; gap: 2rem; flex-wrap: wrap;
+    }
+    .summary-bar span strong { color: #22543d; }
   </style>
 </head>
 <body>
@@ -162,15 +190,30 @@
       <input type="text" id="employeeName" value="Samuel Chiang" placeholder="Full name" />
     </div>
 
-    <div id="dropzone" onclick="document.getElementById('fileInput').click()">
+    <div id="dropzone"
+         ondragover="event.preventDefault(); this.classList.add('over')"
+         ondragleave="this.classList.remove('over')"
+         ondrop="handleDrop(event)"
+         onclick="document.getElementById('fileInput').click()">
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
           d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"/>
       </svg>
-      <p>Drag &amp; drop a <strong>ZIP file</strong> or <strong>JPEG images</strong> here</p>
-      <p style="margin-top:.4rem;font-size:.82rem;color:#a0aec0">or click to browse</p>
+      <div class="dz-title">Drag &amp; drop files here, or <strong>click to browse</strong></div>
+      <div class="dz-sub">Accepts: <strong>ZIP files</strong>, <strong>JPEG</strong>, <strong>PNG</strong>, and other image formats — multiple files at once</div>
     </div>
-    <input type="file" id="fileInput" accept=".zip,.jpg,.jpeg" multiple />
+    <input type="file" id="fileInput" accept=".zip,.jpg,.jpeg,.png,.webp,.bmp,.tiff,.tif" multiple
+           onchange="addFiles(this.files)" />
+
+    <div id="fileList"></div>
+
+    <div class="upload-actions">
+      <button class="btn btn-primary" id="parseBtn" onclick="uploadAll()" disabled>
+        🔍 Parse Receipts with AI
+      </button>
+      <button class="btn btn-outline btn-sm" onclick="clearFiles()">Clear all</button>
+      <span class="count-badge" id="countBadge" style="display:none"></span>
+    </div>
 
     <div id="progress">
       <span id="progressText">Parsing receipts with AI…</span>
@@ -181,6 +224,7 @@
   <!-- Step 2: Review & Edit -->
   <div class="card" id="tableSection">
     <h2>Step 2 — Review &amp; Edit Entries</h2>
+    <div id="summaryBar" class="summary-bar" style="display:none"></div>
     <div class="table-scroll">
       <table id="expenseTable">
         <thead>
@@ -199,7 +243,7 @@
       </table>
     </div>
     <div class="actions">
-      <button class="btn btn-primary" id="addRowBtn" onclick="addEmptyRow()">+ Add Row</button>
+      <button class="btn btn-outline btn-sm" onclick="addEmptyRow()">+ Add Row</button>
       <div class="spacer"></div>
       <button class="btn btn-success" id="generateBtn" onclick="generateReport()">
         ⬇ Generate &amp; Download Excel
@@ -223,63 +267,135 @@ const CATEGORIES = [
   'Meals','Entertainment','Telephone','Office Supplies','Others'
 ];
 
-let receipts = [];
+let stagedFiles = [];   // FileList items staged for upload
+let receipts    = [];   // Parsed receipt objects
 
-// ── Drag & drop ──────────────────────────────────────────────────────────────
-const dz = document.getElementById('dropzone');
-dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
-dz.addEventListener('dragleave', () => dz.classList.remove('over'));
-dz.addEventListener('drop', e => {
-  e.preventDefault(); dz.classList.remove('over');
-  handleFiles(e.dataTransfer.files);
-});
-document.getElementById('fileInput').addEventListener('change', e => handleFiles(e.target.files));
-
-function handleFiles(files) {
-  if (!files || files.length === 0) return;
-  // If multiple JPEGs, package them or send first file
-  uploadFile(files[0]);
+// ── File staging ─────────────────────────────────────────────────────────────
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('dropzone').classList.remove('over');
+  addFiles(e.dataTransfer.files);
 }
 
-async function uploadFile(file) {
+function addFiles(fileList) {
+  for (const f of fileList) {
+    // Avoid duplicates by name+size
+    if (!stagedFiles.find(x => x.name === f.name && x.size === f.size)) {
+      stagedFiles.push(f);
+    }
+  }
+  renderFileList();
+  // Reset input so same file can be re-added after removal
+  document.getElementById('fileInput').value = '';
+}
+
+function removeFile(idx) {
+  stagedFiles.splice(idx, 1);
+  renderFileList();
+}
+
+function clearFiles() {
+  stagedFiles = [];
+  renderFileList();
+}
+
+function renderFileList() {
+  const list  = document.getElementById('fileList');
+  const badge = document.getElementById('countBadge');
+  const btn   = document.getElementById('parseBtn');
+
+  list.innerHTML = stagedFiles.map((f, i) => {
+    const icon = f.name.toLowerCase().endsWith('.zip') ? '🗜️' : '🖼️';
+    const size = f.size > 1024*1024 ? `${(f.size/1024/1024).toFixed(1)} MB` : `${Math.round(f.size/1024)} KB`;
+    return `<div class="file-chip">
+      <span class="chip-icon">${icon}</span>
+      <span>${escHtml(f.name)}</span>
+      <span style="color:#a0aec0">(${size})</span>
+      <button class="chip-remove" onclick="removeFile(${i})" title="Remove">✕</button>
+    </div>`;
+  }).join('');
+
+  if (stagedFiles.length > 0) {
+    badge.style.display = '';
+    badge.textContent = `${stagedFiles.length} file${stagedFiles.length > 1 ? 's' : ''} selected`;
+    btn.disabled = false;
+  } else {
+    badge.style.display = 'none';
+    btn.disabled = true;
+  }
+}
+
+// ── Upload & parse ────────────────────────────────────────────────────────────
+async function uploadAll() {
+  if (stagedFiles.length === 0) return;
+
   const prog = document.getElementById('progress');
   const bar  = document.getElementById('progressBar');
   const txt  = document.getElementById('progressText');
+  const btn  = document.getElementById('parseBtn');
+
   prog.style.display = 'block';
-  txt.textContent = `Uploading ${file.name}…`;
-  bar.style.width = '15%';
+  bar.style.background = '#4299e8';
+  bar.style.width = '5%';
+  btn.disabled = true;
+  txt.textContent = `Uploading ${stagedFiles.length} file(s)…`;
 
   const fd = new FormData();
-  fd.append('file', file);
+  for (const f of stagedFiles) fd.append('files', f);
 
   try {
-    bar.style.width = '40%';
-    txt.textContent = 'Parsing receipts with AI vision…';
+    bar.style.width = '30%';
+    txt.textContent = `Parsing receipts with AI vision… (this may take a moment for large batches)`;
+
     const res = await fetch('/api/parse', { method: 'POST', body: fd });
-    bar.style.width = '85%';
+    bar.style.width = '90%';
+
     if (!res.ok) {
       const err = await res.json();
       throw new Error(err.error || 'Server error');
     }
+
     const data = await res.json();
     bar.style.width = '100%';
-    txt.textContent = `✓ Parsed ${data.receipts.length} receipt(s)`;
+    txt.textContent = `✓ Parsed ${data.receipts.length} receipt(s) from ${data.totalFiles} file(s)`;
+
     receipts = data.receipts;
     renderTable();
-    document.getElementById('tableSection').style.display = 'block';
-    document.getElementById('tableSection').scrollIntoView({ behavior: 'smooth' });
+
+    const sec = document.getElementById('tableSection');
+    sec.style.display = 'block';
+    sec.scrollIntoView({ behavior: 'smooth' });
+
+    showSummary(data);
   } catch (e) {
     txt.textContent = `Error: ${e.message}`;
     bar.style.width = '100%';
     bar.style.background = '#fc8181';
     showToast('Upload failed: ' + e.message);
+  } finally {
+    btn.disabled = stagedFiles.length === 0;
   }
 }
 
-// ── Table rendering ──────────────────────────────────────────────────────────
+function showSummary(data) {
+  const bar = document.getElementById('summaryBar');
+  const total = receipts.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const sorted = [...receipts].filter(r => r.date).sort((a,b) => a.date.localeCompare(b.date));
+  const period = sorted.length > 0
+    ? `${sorted[0].date} → ${sorted[sorted.length-1].date}`
+    : 'N/A';
+  bar.style.display = 'flex';
+  bar.innerHTML = `
+    <span>📄 <strong>${data.totalImages}</strong> image(s) extracted from <strong>${data.totalFiles}</strong> file(s)</span>
+    <span>🧾 <strong>${receipts.length}</strong> receipts parsed</span>
+    <span>💰 Total: <strong>TWD ${total.toLocaleString()}</strong></span>
+    <span>📅 Period: <strong>${period}</strong></span>
+  `;
+}
+
+// ── Table rendering ───────────────────────────────────────────────────────────
 function renderTable() {
-  // Re-assign Ref# after sort
-  const sorted = [...receipts].sort((a,b) => (a.date||'').localeCompare(b.date||''));
+  const sorted = [...receipts].sort((a,b) => (a.date||'zzz').localeCompare(b.date||'zzz'));
   sorted.forEach((r,i) => { r.ref = `${Math.floor(i/7)+1}${String.fromCharCode(65+(i%7))}`; });
 
   const tbody = document.getElementById('tableBody');
@@ -302,10 +418,10 @@ function buildRow(r) {
         ? `<img class="thumb" src="data:image/jpeg;base64,${r.imageBase64}"
                onclick="openModal('${r.id}')" title="Click to enlarge" />`
         : '<span style="color:#a0aec0;font-size:.8rem">No image</span>'}
-      ${r.error ? `<div class="error-badge">⚠ ${r.error}</div>` : ''}
+      ${r.error ? `<span class="error-badge">⚠ ${escHtml(r.error)}</span>` : ''}
     </td>
     <td><span class="ref-badge">${r.ref || ''}</span></td>
-    <td><input type="text" value="${r.date||''}" onchange="updateField('${r.id}','date',this.value)" placeholder="YYYY-MM-DD" style="min-width:120px" /></td>
+    <td><input type="text" value="${escHtml(r.date||'')}" onchange="updateField('${r.id}','date',this.value)" placeholder="YYYY-MM-DD" style="min-width:120px" /></td>
     <td><input type="text" value="${escHtml(r.merchant||'')}" onchange="updateField('${r.id}','merchant',this.value)" style="min-width:140px" /></td>
     <td><select onchange="updateField('${r.id}','category',this.value)">${catOptions}</select></td>
     <td><input type="number" value="${r.amount||0}" onchange="updateField('${r.id}','amount',+this.value)" style="min-width:90px;text-align:right" /></td>
@@ -315,13 +431,15 @@ function buildRow(r) {
   return tr;
 }
 
-function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
 function updateField(id, field, value) {
   const r = receipts.find(x => x.id === id);
   if (r) {
     r[field] = value;
-    if (field === 'date') renderTable(); // re-sort & re-ref
+    if (field === 'date') renderTable();
   }
 }
 
@@ -333,16 +451,11 @@ function deleteRow(id) {
 function addEmptyRow() {
   receipts.push({
     id: crypto.randomUUID(),
-    filename: '',
-    imageBase64: '',
-    date: '',
-    amount: 0,
-    merchant: '',
-    category: 'Others',
-    description: ''
+    filename: '', imageBase64: '',
+    date: '', amount: 0, merchant: '',
+    category: 'Others', description: ''
   });
   renderTable();
-  document.getElementById('tableSection').scrollIntoView({ behavior: 'smooth' });
 }
 
 // ── Generate Excel ────────────────────────────────────────────────────────────
