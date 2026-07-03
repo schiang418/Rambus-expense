@@ -2,6 +2,8 @@ import express from 'express';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 import axios from 'axios';
+import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
@@ -10,6 +12,12 @@ import { generateExcel } from './excelGenerator.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Persistent storage for cumulative reports — point DATA_DIR at the Railway
+// volume mount path (e.g. /data) so receipts survive restarts/redeploys
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const REPORTS_DIR = path.join(DATA_DIR, 'reports');
+fs.mkdirSync(REPORTS_DIR, { recursive: true });
 
 app.use(express.json({ limit: '100mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -34,6 +42,116 @@ function isImage(filename) {
 
 function mimeFor(filename) {
   return MIME_BY_EXT[path.extname(filename).toLowerCase()] || 'image/jpeg';
+}
+
+// ─── Report store helpers ─────────────────────────────────────────────────────
+function slugify(name) {
+  return name.trim().toLowerCase()
+    .replace(/[^a-z0-9一-鿿]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .substring(0, 60) || `report-${Date.now()}`;
+}
+
+// Slugs are path components — reject anything that could traverse directories
+function safeSlug(s) {
+  return /^[a-z0-9一-鿿-]{1,60}$/.test(s || '') ? s : null;
+}
+
+function reportDir(slug) {
+  return path.join(REPORTS_DIR, slug);
+}
+
+async function loadManifest(slug) {
+  try {
+    return JSON.parse(await fsp.readFile(path.join(reportDir(slug), 'manifest.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function saveManifest(manifest) {
+  manifest.updatedAt = new Date().toISOString();
+  await fsp.writeFile(
+    path.join(reportDir(manifest.slug), 'manifest.json'),
+    JSON.stringify(manifest, null, 2)
+  );
+}
+
+function reportSummary(m) {
+  return {
+    slug: m.slug,
+    name: m.name,
+    createdAt: m.createdAt,
+    updatedAt: m.updatedAt,
+    generatedAt: m.generatedAt || null,
+    imageCount: m.images.length,
+  };
+}
+
+// Collect receipt images from uploaded files (ZIPs are expanded)
+function extractImages(files) {
+  const images = [];
+  for (const file of files) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (ext === '.zip') {
+      const zip = new AdmZip(file.buffer);
+      for (const entry of zip.getEntries()) {
+        if (!entry.isDirectory && isImage(entry.entryName)) {
+          const baseName = path.basename(entry.entryName);
+          if (baseName.startsWith('._') || baseName.startsWith('.')) continue;
+          images.push({
+            name: entry.entryName,
+            buffer: entry.getData(),
+            mimeType: mimeFor(entry.entryName)
+          });
+        }
+      }
+    } else if (isImage(file.originalname)) {
+      images.push({
+        name: file.originalname,
+        buffer: file.buffer,
+        mimeType: file.mimetype || 'image/jpeg'
+      });
+    }
+  }
+  return images;
+}
+
+// Parse images through the LLM in small parallel batches.
+// Returns an array aligned with the input: {date, amount, merchant, category, description, error?}
+async function parseImagesBatch(images) {
+  const out = [];
+  const BATCH = Number(process.env.PARSE_CONCURRENCY) || 3;
+  for (let i = 0; i < images.length; i += BATCH) {
+    const batch = images.slice(i, i + BATCH);
+    console.log(`Parsing batch ${Math.floor(i/BATCH)+1}: images ${i+1}–${Math.min(i+BATCH, images.length)}/${images.length}`);
+    const batchResults = await Promise.all(batch.map(async (img) => {
+      try {
+        const parsed = await parseReceiptWithLLM(img.buffer.toString('base64'), img.mimeType);
+        const westernDate = convertRocToWestern(parsed.date);
+        return {
+          date: westernDate || parsed.date || '',
+          amount: parsed.amount,
+          merchant: parsed.merchant,
+          category: parsed.category || 'Others',
+          description: parsed.description || parsed.merchant
+        };
+      } catch (e) {
+        console.error(`Failed to parse ${img.name}: [${e.response?.status}] ${e.response?.data ? JSON.stringify(e.response.data) : e.message}`);
+        return {
+          date: '',
+          amount: 0,
+          merchant: img.name,
+          category: 'Others',
+          description: 'Parse failed – please fill manually',
+          error: e.message
+        };
+      }
+    }));
+    out.push(...batchResults);
+    if (i + BATCH < images.length) await sleep(1000);
+  }
+  return out;
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -133,87 +251,27 @@ Category rules:
   }
 }
 
-// ─── POST /api/parse ──────────────────────────────────────────────────────────
+// ─── POST /api/parse (one-shot mode) ──────────────────────────────────────────
 app.post('/api/parse', upload.array('files', 200), async (req, res) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    // Collect all images from every uploaded file
-    const images = [];
-
-    for (const file of req.files) {
-      const ext = path.extname(file.originalname).toLowerCase();
-
-      if (ext === '.zip') {
-        const zip = new AdmZip(file.buffer);
-        for (const entry of zip.getEntries()) {
-          if (!entry.isDirectory && isImage(entry.entryName)) {
-            const baseName = path.basename(entry.entryName);
-            if (baseName.startsWith('._') || baseName.startsWith('.')) continue;
-            images.push({
-              name: entry.entryName,
-              buffer: entry.getData(),
-              mimeType: mimeFor(entry.entryName)
-            });
-          }
-        }
-      } else if (isImage(file.originalname)) {
-        images.push({
-          name: file.originalname,
-          buffer: file.buffer,
-          mimeType: file.mimetype || 'image/jpeg'
-        });
-      }
-    }
-
+    const images = extractImages(req.files);
     if (images.length === 0) {
       return res.status(400).json({ error: 'No receipt images found in the uploaded files' });
     }
 
     console.log(`Processing ${images.length} receipt image(s) from ${req.files.length} uploaded file(s)`);
+    const parsed = await parseImagesBatch(images);
 
-    // Parse images in small parallel batches to stay under API rate limits
-    const results = [];
-    const BATCH = Number(process.env.PARSE_CONCURRENCY) || 3;
-    for (let i = 0; i < images.length; i += BATCH) {
-      const batch = images.slice(i, i + BATCH);
-      console.log(`Parsing batch ${Math.floor(i/BATCH)+1}: images ${i+1}–${Math.min(i+BATCH, images.length)}/${images.length}`);
-      const batchResults = await Promise.all(batch.map(async (img) => {
-        try {
-          const b64 = img.buffer.toString('base64');
-          const parsed = await parseReceiptWithLLM(b64, img.mimeType);
-          const westernDate = convertRocToWestern(parsed.date);
-          return {
-            id: uuidv4(),
-            filename: img.name,
-            imageBase64: b64,
-            date: westernDate || parsed.date,
-            amount: parsed.amount,
-            merchant: parsed.merchant,
-            category: parsed.category || 'Others',
-            description: parsed.description || parsed.merchant
-          };
-        } catch (e) {
-          console.error(`Failed to parse ${img.name}: [${e.response?.status}] ${e.response?.data ? JSON.stringify(e.response.data) : e.message}`);
-          return {
-            id: uuidv4(),
-            filename: img.name,
-            imageBase64: img.buffer.toString('base64'),
-            date: '',
-            amount: 0,
-            merchant: img.name,
-            category: 'Others',
-            description: 'Parse failed – please fill manually',
-            error: e.message
-          };
-        }
-      }));
-      results.push(...batchResults);
-      // Small pause between batches
-      if (i + BATCH < images.length) await sleep(1000);
-    }
+    const results = images.map((img, i) => ({
+      id: uuidv4(),
+      filename: img.name,
+      imageBase64: img.buffer.toString('base64'),
+      ...parsed[i]
+    }));
 
     // Sort chronologically
     results.sort((a, b) => {
@@ -230,15 +288,225 @@ app.post('/api/parse', upload.array('files', 200), async (req, res) => {
   }
 });
 
+// ─── Cumulative reports (persisted on the Railway volume) ─────────────────────
+
+// List all reports
+app.get('/api/reports', async (req, res) => {
+  try {
+    const entries = await fsp.readdir(REPORTS_DIR, { withFileTypes: true });
+    const reports = [];
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const m = await loadManifest(e.name);
+      if (m) reports.push(reportSummary(m));
+    }
+    reports.sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
+    res.json({ reports });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create a report (or return the existing one with the same name)
+app.post('/api/reports', async (req, res) => {
+  try {
+    const name = (req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'Report name is required' });
+    const slug = slugify(name);
+    let m = await loadManifest(slug);
+    if (!m) {
+      await fsp.mkdir(reportDir(slug), { recursive: true });
+      m = {
+        slug,
+        name,
+        createdAt: new Date().toISOString(),
+        generatedAt: null,
+        images: []
+      };
+      await saveManifest(m);
+    }
+    res.json(reportSummary(m));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Report detail (image list without pixel data)
+app.get('/api/reports/:slug', async (req, res) => {
+  const slug = safeSlug(req.params.slug);
+  const m = slug && await loadManifest(slug);
+  if (!m) return res.status(404).json({ error: 'Report not found' });
+  res.json({
+    ...reportSummary(m),
+    images: m.images.map(i => ({
+      id: i.id,
+      originalName: i.originalName,
+      mimeType: i.mimeType,
+      size: i.size,
+      addedAt: i.addedAt,
+      parsed: i.parsed ? { ...i.parsed } : null
+    }))
+  });
+});
+
+// Add ZIPs / photos to a report (accumulates on the volume)
+app.post('/api/reports/:slug/upload', upload.array('files', 200), async (req, res) => {
+  try {
+    const slug = safeSlug(req.params.slug);
+    const m = slug && await loadManifest(slug);
+    if (!m) return res.status(404).json({ error: 'Report not found' });
+
+    const images = extractImages(req.files || []);
+    if (images.length === 0) {
+      return res.status(400).json({ error: 'No receipt images found in the uploaded files' });
+    }
+
+    for (const img of images) {
+      const id = uuidv4();
+      const ext = path.extname(img.name).toLowerCase() || '.jpg';
+      const storedName = `${id}${ext}`;
+      await fsp.writeFile(path.join(reportDir(slug), storedName), img.buffer);
+      m.images.push({
+        id,
+        storedName,
+        originalName: img.name,
+        mimeType: img.mimeType,
+        size: img.buffer.length,
+        addedAt: new Date().toISOString(),
+        parsed: null
+      });
+    }
+    await saveManifest(m);
+    console.log(`Report "${m.name}": added ${images.length} image(s), now ${m.images.length} total`);
+    res.json({ added: images.length, imageCount: m.images.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Serve a stored receipt image (thumbnails / preview)
+app.get('/api/reports/:slug/images/:id', async (req, res) => {
+  const slug = safeSlug(req.params.slug);
+  const m = slug && await loadManifest(slug);
+  const img = m?.images.find(i => i.id === req.params.id);
+  if (!img) return res.status(404).json({ error: 'Image not found' });
+  try {
+    const buf = await fsp.readFile(path.join(reportDir(slug), img.storedName));
+    res.setHeader('Content-Type', img.mimeType || 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buf);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove one receipt from a report
+app.delete('/api/reports/:slug/images/:id', async (req, res) => {
+  try {
+    const slug = safeSlug(req.params.slug);
+    const m = slug && await loadManifest(slug);
+    if (!m) return res.status(404).json({ error: 'Report not found' });
+    const idx = m.images.findIndex(i => i.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Image not found' });
+    const [img] = m.images.splice(idx, 1);
+    await fsp.rm(path.join(reportDir(slug), img.storedName), { force: true });
+    await saveManifest(m);
+    res.json({ imageCount: m.images.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a whole report
+app.delete('/api/reports/:slug', async (req, res) => {
+  try {
+    const slug = safeSlug(req.params.slug);
+    if (!slug || !(await loadManifest(slug))) return res.status(404).json({ error: 'Report not found' });
+    await fsp.rm(reportDir(slug), { recursive: true, force: true });
+    res.json({ deleted: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The trigger: parse everything accumulated in a report.
+// Results are cached per image in the manifest, so only new (or previously
+// failed) receipts hit the LLM on subsequent runs.
+app.post('/api/reports/:slug/parse', async (req, res) => {
+  try {
+    const slug = safeSlug(req.params.slug);
+    const m = slug && await loadManifest(slug);
+    if (!m) return res.status(404).json({ error: 'Report not found' });
+    if (m.images.length === 0) return res.status(400).json({ error: 'This report has no receipts yet' });
+
+    const toParse = m.images.filter(i => !i.parsed || i.parsed.error);
+    if (toParse.length > 0) {
+      console.log(`Report "${m.name}": parsing ${toParse.length} of ${m.images.length} receipt(s)`);
+      const buffers = await Promise.all(toParse.map(async i => ({
+        name: i.originalName,
+        buffer: await fsp.readFile(path.join(reportDir(slug), i.storedName)),
+        mimeType: i.mimeType
+      })));
+      const parsed = await parseImagesBatch(buffers);
+      toParse.forEach((i, idx) => { i.parsed = parsed[idx]; });
+      await saveManifest(m);
+    }
+
+    const receipts = await Promise.all(m.images.map(async i => ({
+      id: i.id,
+      filename: i.originalName,
+      imageBase64: (await fsp.readFile(path.join(reportDir(slug), i.storedName))).toString('base64'),
+      date: i.parsed?.date || '',
+      amount: i.parsed?.amount ?? 0,
+      merchant: i.parsed?.merchant || i.originalName,
+      category: i.parsed?.category || 'Others',
+      description: i.parsed?.description || '',
+      ...(i.parsed?.error ? { error: i.parsed.error } : {})
+    })));
+
+    receipts.sort((a, b) => {
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return a.date.localeCompare(b.date);
+    });
+
+    res.json({
+      receipts,
+      totalFiles: m.images.length,
+      totalImages: m.images.length,
+      parsedNow: toParse.length,
+      fromCache: m.images.length - toParse.length
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── POST /api/generate ───────────────────────────────────────────────────────
 app.post('/api/generate', async (req, res) => {
   try {
-    const { employeeName, receipts } = req.body;
+    const { employeeName, receipts, reportSlug } = req.body;
     if (!receipts || receipts.length === 0) {
       return res.status(400).json({ error: 'No receipts provided' });
     }
 
     const excelBuffer = await generateExcel(employeeName || 'Samuel Chiang', receipts);
+
+    // When generating from a cumulative report, stamp it as generated
+    if (reportSlug) {
+      const slug = safeSlug(reportSlug);
+      const m = slug && await loadManifest(slug);
+      if (m) {
+        m.generatedAt = new Date().toISOString();
+        await saveManifest(m);
+      }
+    }
 
     const sorted = [...receipts].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     // Dates may still contain non-ASCII (e.g. unconverted ROC dates like 115年04月14日),

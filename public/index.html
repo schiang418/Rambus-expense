@@ -2,8 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Rambus Taiwan Expense Report Generator</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Expenses" />
+  <link rel="apple-touch-icon" href="/icons/icon-180.png" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -170,6 +176,65 @@
       display: flex; gap: 2rem; flex-wrap: wrap;
     }
     .summary-bar span strong { color: #22543d; }
+
+    /* Reports */
+    .report-create { display: flex; gap: .6rem; flex-wrap: wrap; }
+    .report-create input {
+      flex: 1; min-width: 180px; padding: .5rem .75rem;
+      border: 1.5px solid #e2e8f0; border-radius: 7px; font-size: .95rem;
+    }
+    .report-create input:focus { outline: none; border-color: #4299e8; }
+    .report-list { display: flex; flex-direction: column; gap: .5rem; margin-top: 1rem; }
+    .report-item {
+      display: flex; align-items: center; gap: .75rem;
+      padding: .65rem .9rem; border: 1.5px solid #e2e8f0; border-radius: 8px;
+      cursor: pointer; transition: border-color .15s, background .15s;
+    }
+    .report-item:hover, .report-item.active { border-color: #4299e8; background: #ebf8ff; }
+    .report-item .r-name { font-weight: 600; }
+    .report-item .r-meta { font-size: .8rem; color: #718096; margin-left: auto; text-align: right; }
+    .r-badge {
+      font-size: .72rem; font-weight: 700; border-radius: 5px; padding: .12rem .5rem;
+    }
+    .r-badge.open { background: #ebf8ff; color: #2b6cb0; }
+    .r-badge.generated { background: #f0fff4; color: #276749; }
+    .report-toolbar { display: flex; gap: .6rem; flex-wrap: wrap; margin-top: 1rem; }
+    .thumb-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+      gap: .6rem; margin-top: 1rem;
+    }
+    .thumb-cell { position: relative; }
+    .thumb-cell img {
+      width: 100%; height: 112px; object-fit: cover;
+      border-radius: 6px; border: 1px solid #e2e8f0; cursor: pointer; display: block;
+    }
+    .thumb-cell .t-del {
+      position: absolute; top: 4px; right: 4px;
+      background: rgba(0,0,0,.55); color: #fff; border: none; border-radius: 50%;
+      width: 22px; height: 22px; cursor: pointer; font-size: .7rem; line-height: 1;
+    }
+    .thumb-cell .t-del:hover { background: #e53e3e; }
+    .thumb-cell .t-parsed {
+      position: absolute; bottom: 4px; left: 4px;
+      background: rgba(56,161,105,.92); color: #fff;
+      font-size: .62rem; font-weight: 700; border-radius: 4px; padding: 1px 5px;
+    }
+    .thumb-cell .t-failed { background: rgba(229,62,62,.92); }
+
+    /* Mobile */
+    @media (max-width: 640px) {
+      header { padding: 0 1rem; }
+      main { margin: 1rem auto; padding: 0 .75rem; }
+      .card { padding: 1.1rem; border-radius: 10px; }
+      .field-row { flex-direction: column; align-items: stretch; gap: .35rem; }
+      .field-row label { min-width: 0; }
+      .report-toolbar .btn, .upload-actions .btn-primary, .actions .btn-success {
+        width: 100%; justify-content: center;
+      }
+      .thumb-grid { grid-template-columns: repeat(auto-fill, minmax(74px, 1fr)); }
+      .thumb-cell img { height: 92px; }
+      #dropzone { padding: 1.5rem 1rem; }
+    }
   </style>
 </head>
 <body>
@@ -181,9 +246,48 @@
 
 <main>
 
-  <!-- Step 1: Upload -->
+  <!-- Expense report collections -->
   <div class="card">
-    <h2>Step 1 — Upload Receipts</h2>
+    <h2>📁 Expense Reports — collect receipts over time</h2>
+
+    <div class="report-create">
+      <input type="text" id="newReportName" placeholder="New report name, e.g. July 2026 Taiwan"
+             onkeydown="if(event.key==='Enter')createReport()" />
+      <button class="btn btn-primary btn-sm" onclick="createReport()">＋ Create</button>
+    </div>
+
+    <div id="reportList" class="report-list"></div>
+
+    <div id="reportDetail" style="display:none; margin-top:1.4rem; border-top:1px solid #e2e8f0; padding-top:1.1rem;">
+      <div style="display:flex; align-items:center; gap:.75rem; flex-wrap:wrap;">
+        <span style="font-weight:700; font-size:1.05rem;" id="reportTitle"></span>
+        <span class="count-badge" id="reportCount"></span>
+        <span style="flex:1"></span>
+        <button class="btn btn-outline btn-sm" onclick="closeReport()">Close</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteReport()">🗑 Delete report</button>
+      </div>
+
+      <div class="report-toolbar">
+        <button class="btn btn-outline" onclick="document.getElementById('cameraInput').click()">📷 Take Photo</button>
+        <button class="btn btn-outline" onclick="document.getElementById('reportFileInput').click()">🗂 Add ZIP / Images</button>
+        <button class="btn btn-primary" id="processBtn" onclick="processReport()">🔍 Process All &amp; Review</button>
+      </div>
+      <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none"
+             onchange="uploadToReport(this)" />
+      <input type="file" id="reportFileInput" accept=".zip,.jpg,.jpeg,.png,.webp,.bmp,.tiff,.tif" multiple style="display:none"
+             onchange="uploadToReport(this)" />
+
+      <div id="reportProgress" style="display:none; margin-top:1rem; background:#ebf8ff; border-radius:8px; padding:.8rem 1.1rem; font-size:.9rem; color:#2b6cb0;">
+        <span id="reportProgressText"></span>
+      </div>
+
+      <div id="thumbGrid" class="thumb-grid"></div>
+    </div>
+  </div>
+
+  <!-- Step 1: Upload (quick one-shot mode) -->
+  <div class="card">
+    <h2>⚡ Quick Mode — parse &amp; generate in one go</h2>
 
     <div class="field-row">
       <label>Employee Name</label>
@@ -267,8 +371,172 @@ const CATEGORIES = [
   'Meals','Entertainment','Telephone','Office Supplies','Others'
 ];
 
-let stagedFiles = [];   // FileList items staged for upload
-let receipts    = [];   // Parsed receipt objects
+let stagedFiles = [];   // FileList items staged for upload (quick mode)
+let receipts    = [];   // Parsed receipt objects (review table)
+let activeReport   = null;     // currently open cumulative report {slug, name, images...}
+let receiptsSource = 'quick';  // which flow filled the review table: 'quick' | 'report'
+
+// ── Cumulative reports ───────────────────────────────────────────────────────
+async function api(url, opts) {
+  const res = await fetch(url, opts);
+  const isJson = (res.headers.get('Content-Type') || '').includes('json');
+  const data = isJson ? await res.json() : null;
+  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  return data;
+}
+
+async function loadReports() {
+  try {
+    const data = await api('/api/reports');
+    renderReportList(data.reports);
+  } catch (e) {
+    showToast('Could not load reports: ' + e.message);
+  }
+}
+
+function renderReportList(reports) {
+  const list = document.getElementById('reportList');
+  if (!reports.length) {
+    list.innerHTML = '<div style="color:#a0aec0;font-size:.88rem;padding:.4rem 0">No reports yet — create one above, then keep adding receipts to it until you\'re ready to generate.</div>';
+    return;
+  }
+  list.innerHTML = reports.map(r => `
+    <div class="report-item ${activeReport?.slug === r.slug ? 'active' : ''}" onclick="openReport('${r.slug}')">
+      <span class="r-badge ${r.generatedAt ? 'generated' : 'open'}">${r.generatedAt ? 'GENERATED' : 'OPEN'}</span>
+      <span class="r-name">${escHtml(r.name)}</span>
+      <span class="r-meta">${r.imageCount} receipt${r.imageCount === 1 ? '' : 's'}<br>${(r.updatedAt || r.createdAt).substring(0, 10)}</span>
+    </div>`).join('');
+}
+
+async function createReport() {
+  const input = document.getElementById('newReportName');
+  const name = input.value.trim();
+  if (!name) { showToast('Enter a report name first'); return; }
+  try {
+    const r = await api('/api/reports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    input.value = '';
+    await openReport(r.slug);
+    await loadReports();
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function openReport(slug) {
+  try {
+    activeReport = await api(`/api/reports/${slug}`);
+    renderReportDetail();
+    await loadReports();
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+function closeReport() {
+  activeReport = null;
+  document.getElementById('reportDetail').style.display = 'none';
+  loadReports();
+}
+
+function renderReportDetail() {
+  if (!activeReport) return;
+  document.getElementById('reportDetail').style.display = 'block';
+  document.getElementById('reportTitle').textContent = activeReport.name;
+  const n = activeReport.images.length;
+  document.getElementById('reportCount').textContent =
+    `${n} receipt${n === 1 ? '' : 's'}${activeReport.generatedAt ? ` · generated ${activeReport.generatedAt.substring(0, 10)}` : ''}`;
+  document.getElementById('processBtn').disabled = n === 0;
+
+  document.getElementById('thumbGrid').innerHTML = activeReport.images.map(img => `
+    <div class="thumb-cell">
+      <img src="/api/reports/${activeReport.slug}/images/${img.id}" loading="lazy"
+           onclick="openModalSrc('/api/reports/${activeReport.slug}/images/${img.id}')"
+           title="${escHtml(img.originalName)}" />
+      <button class="t-del" onclick="deleteReportImage('${img.id}')" title="Remove">✕</button>
+      ${img.parsed ? `<span class="t-parsed ${img.parsed.error ? 't-failed' : ''}">${img.parsed.error ? '⚠' : '✓ ' + escHtml(String(img.parsed.amount ?? ''))}</span>` : ''}
+    </div>`).join('');
+}
+
+async function uploadToReport(input) {
+  if (!activeReport || !input.files.length) return;
+  const fd = new FormData();
+  for (const f of input.files) fd.append('files', f);
+  input.value = '';
+
+  const prog = document.getElementById('reportProgress');
+  const txt  = document.getElementById('reportProgressText');
+  prog.style.display = 'block';
+  txt.textContent = 'Uploading…';
+  try {
+    const data = await api(`/api/reports/${activeReport.slug}/upload`, { method: 'POST', body: fd });
+    txt.textContent = `✓ Added ${data.added} receipt(s) — ${data.imageCount} total in this report`;
+    await openReport(activeReport.slug);
+  } catch (e) {
+    txt.textContent = 'Error: ' + e.message;
+    showToast('Upload failed: ' + e.message);
+  }
+  setTimeout(() => { prog.style.display = 'none'; }, 4000);
+}
+
+async function deleteReportImage(id) {
+  if (!activeReport) return;
+  try {
+    await api(`/api/reports/${activeReport.slug}/images/${id}`, { method: 'DELETE' });
+    await openReport(activeReport.slug);
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function deleteReport() {
+  if (!activeReport) return;
+  if (!confirm(`Delete report "${activeReport.name}" and all its receipts? This cannot be undone.`)) return;
+  try {
+    await api(`/api/reports/${activeReport.slug}`, { method: 'DELETE' });
+    closeReport();
+    showToast('Report deleted');
+  } catch (e) {
+    showToast('Error: ' + e.message);
+  }
+}
+
+async function processReport() {
+  if (!activeReport || !activeReport.images.length) return;
+  const btn  = document.getElementById('processBtn');
+  const prog = document.getElementById('reportProgress');
+  const txt  = document.getElementById('reportProgressText');
+  btn.disabled = true;
+  prog.style.display = 'block';
+  const unparsed = activeReport.images.filter(i => !i.parsed || i.parsed.error).length;
+  txt.textContent = unparsed
+    ? `Parsing ${unparsed} new receipt(s) with AI vision… (already-parsed ones are cached)`
+    : 'Loading parsed receipts…';
+
+  try {
+    const data = await api(`/api/reports/${activeReport.slug}/parse`, { method: 'POST' });
+    txt.textContent = `✓ ${data.receipts.length} receipt(s) ready (${data.parsedNow} newly parsed, ${data.fromCache} from cache)`;
+    receipts = data.receipts;
+    receiptsSource = 'report';
+    renderTable();
+    const sec = document.getElementById('tableSection');
+    sec.style.display = 'block';
+    sec.scrollIntoView({ behavior: 'smooth' });
+    showSummary(data);
+    await openReport(activeReport.slug);
+  } catch (e) {
+    txt.textContent = 'Error: ' + e.message;
+    showToast('Processing failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { prog.style.display = 'none'; }, 5000);
+  }
+}
+
+loadReports();
 
 // ── File staging ─────────────────────────────────────────────────────────────
 function handleDrop(e) {
@@ -325,9 +593,10 @@ function renderFileList() {
   }
 }
 
-// ── Upload & parse ────────────────────────────────────────────────────────────
+// ── Upload & parse (quick mode) ──────────────────────────────────────────────
 async function uploadAll() {
   if (stagedFiles.length === 0) return;
+  receiptsSource = 'quick';
 
   const prog = document.getElementById('progress');
   const bar  = document.getElementById('progressBar');
@@ -467,6 +736,7 @@ async function generateReport() {
   try {
     const payload = {
       employeeName: document.getElementById('employeeName').value || 'Samuel Chiang',
+      reportSlug: receiptsSource === 'report' ? activeReport?.slug : undefined,
       receipts: receipts.map(r => ({
         id: r.id, date: r.date, amount: r.amount,
         merchant: r.merchant, category: r.category,
@@ -496,6 +766,7 @@ async function generateReport() {
     a.click();
     URL.revokeObjectURL(url);
     showToast('✓ Excel report downloaded!');
+    if (receiptsSource === 'report' && activeReport) openReport(activeReport.slug);
   } catch (e) {
     showToast('Error: ' + e.message);
   } finally {
@@ -509,6 +780,10 @@ function openModal(id) {
   const r = receipts.find(x => x.id === id);
   if (!r || !r.imageBase64) return;
   document.getElementById('modalImg').src = `data:image/jpeg;base64,${r.imageBase64}`;
+  document.getElementById('modal').classList.add('open');
+}
+function openModalSrc(src) {
+  document.getElementById('modalImg').src = src;
   document.getElementById('modal').classList.add('open');
 }
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
