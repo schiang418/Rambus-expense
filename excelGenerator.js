@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import sharp from 'sharp';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { normalizeDate, isIsoDate } from './dateUtils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -73,8 +74,9 @@ async function resizeToFill(buffer, cellW, cellH) {
 }
 
 export async function generateExcel(employeeName, receipts) {
-  // Sort chronologically by date string
-  const sorted = [...receipts].sort((a, b) => {
+  // Normalize every date to ISO first (cached parses and hand edits can arrive
+  // as 08Jul2026, 7/1/26, 115/4/28 ...), then sort chronologically
+  const sorted = receipts.map(r => ({ ...r, date: normalizeDate(r.date) || '' })).sort((a, b) => {
     if (!a.date) return 1;
     if (!b.date) return -1;
     return a.date.localeCompare(b.date);
@@ -83,8 +85,10 @@ export async function generateExcel(employeeName, receipts) {
   // Assign Ref# (1A, 1B ... 1G, 2A, 2B ...)
   sorted.forEach((r, i) => { r.ref = refLabel(i); });
 
-  const firstDate = sorted[0]?.date || '';
-  const lastDate  = sorted[sorted.length - 1]?.date || '';
+  // Period spans only the receipts with a recognizable date
+  const isoDates = sorted.map(r => r.date).filter(isIsoDate);
+  const firstDate = isoDates[0] || '';
+  const lastDate  = isoDates[isoDates.length - 1] || '';
   const n = sorted.length;
 
   // ── Row layout (dynamic based on receipt count) ────────────────────────────
@@ -150,12 +154,12 @@ export async function generateExcel(employeeName, receipts) {
     }
     wsTWD.getRow(row).height = 18.75;
 
-    // Real date value + m/d/yy format (matches the reference layout, e.g. 4/14/26)
+    // Real date value, consistently formatted as m/d/yyyy (e.g. 8/7/2026)
     const dateCell = wsTWD.getCell(row, 1);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(r.date || '')) {
+    if (isIsoDate(r.date)) {
       const [y, mo, d] = r.date.split('-').map(Number);
       dateCell.value = new Date(Date.UTC(y, mo - 1, d));
-      dateCell.numFmt = 'm/d/yy';
+      dateCell.numFmt = 'm/d/yyyy';
     } else {
       dateCell.value = r.date || '';
     }
