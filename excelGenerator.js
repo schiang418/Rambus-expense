@@ -3,6 +3,7 @@ import sharp from 'sharp';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { normalizeDate, isIsoDate } from './dateUtils.js';
+import { FX_MARKUP } from './fx.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -166,6 +167,16 @@ export async function generateExcel(employeeName, receipts) {
   } else {
     wsTWD.getCell(2, 13).value = fxCurrencies.join(' / ');
     wsTWD.getCell(3, 13).value = fxCurrencies.map(c => `${c} ${fmtRates(c)}`).join(' / ');
+  }
+
+  // Fine print to the right of the box (N2) explaining the card-fee markup
+  const note = wsTWD.getCell(2, 14);
+  if (fxCurrencies.length > 0) {
+    note.value = `* Rate = bank rate on the receipt date + ${(FX_MARKUP * 100).toFixed(1)}% credit card fee (foreign-currency receipts)`;
+    note.font = { name: 'Arial', size: 8, italic: true, color: { argb: 'FF718096' } };
+    note.alignment = { vertical: 'middle', horizontal: 'left' };
+  } else {
+    note.value = null;
   }
 
   // ── Write data rows ────────────────────────────────────────────────────────
