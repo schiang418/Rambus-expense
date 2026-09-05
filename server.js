@@ -194,8 +194,17 @@ function convertRocToWestern(dateStr) {
     const cn2int = s => [...s].reduce((v, c) => (CN[c] >= 10 ? v + CN[c] : v + (CN[c] || 0)), 0);
     return `${yr(m[1])}-${pad(cn2int(m[2]))}-${pad(cn2int(m[3]))}`;
   }
+  m = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);            // US style 07/26/2026
+  if (m) return `${m[3]}-${pad(m[1])}-${pad(m[2])}`;
   m = dateStr.match(/(\d+)\/(\d{1,2})\/(\d{1,2})/);               // 115/4/28 or 2026/06/16
   if (m) return `${yr(m[1])}-${pad(m[2])}-${pad(m[3])}`;
+  const MON = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+  m = dateStr.match(/(\d{1,2})\s*([A-Za-z]{3})[a-z]*\.?,?\s*(\d{4})/); // 08Jul2026, 8 Jul 2026
+  if (m && MON[m[2].toLowerCase()]) return `${m[3]}-${pad(MON[m[2].toLowerCase()])}-${pad(m[1])}`;
+  m = dateStr.match(/([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s*(\d{4})/); // Jun 9, 2026
+  if (m && MON[m[1].toLowerCase()]) return `${m[3]}-${pad(MON[m[1].toLowerCase()])}-${pad(m[2])}`;
+  m = dateStr.match(/^(\d{1,2})-(\d{1,2})-(\d{2})$/);               // 08-07-26 (US M-D-YY)
+  if (m) return `20${m[3]}-${pad(m[1])}-${pad(m[2])}`;
   return dateStr;
 }
 
@@ -209,12 +218,22 @@ async function parseReceiptWithLLM(imageBase64, mimeType = 'image/jpeg', retries
 Analyze this receipt image and extract the following information.
 Return ONLY a valid JSON object with exactly these fields (no markdown, no explanation):
 {
-  "date": "the date on the receipt as printed (e.g. 2026-04-14 or 115年04月14日 or 115/4/14)",
+  "date": "YYYY-MM-DD",
   "amount": <number, total amount paid in TWD, no currency symbol>,
-  "merchant": "merchant/business name",
+  "merchant": "merchant/business name as printed on the receipt (Chinese is fine)",
   "category": "one of: Airfare | Transportation | Lodging | Travel-Other | Meals | Entertainment | Telephone | Office Supplies | Others",
-  "description": "brief description of the expense (10 words max)"
+  "description": "concise English summary of what was purchased, 3-8 words"
 }
+
+Date rules:
+- Always output ISO format YYYY-MM-DD.
+- Taiwan receipts often use the ROC/Minguo calendar: add 1911 to the year (115年04月14日 or 115/4/14 → 2026-04-14).
+- US receipts use month/day/year (07/26/2026 → 2026-07-26). Written months: 08Jul2026 or Jun 9, 2026 → 2026-07-08 / 2026-06-09.
+
+Description rules:
+- ALWAYS write the description in English, even when the receipt is entirely in Chinese.
+- Summarize the purpose of the expense; do not transliterate or translate the receipt text verbatim.
+- Good examples: "parking fee", "gasoline for company car", "mobile phone monthly bill", "lunch with client", "gym membership fee", "printing services", "HSR ticket Hsinchu to Taipei".
 
 Category rules:
 - Meals: restaurants, cafes, food, catering, 餐廳, 美食, 飲食
@@ -462,7 +481,10 @@ app.post('/api/reports/:slug/parse', async (req, res) => {
     if (!m) return res.status(404).json({ error: 'Report not found' });
     if (m.images.length === 0) return res.status(400).json({ error: 'This report has no receipts yet' });
 
-    const toParse = m.images.filter(i => !i.parsed || i.parsed.error);
+    // force=true re-parses everything (e.g. after a prompt change); otherwise
+    // only new or previously-failed receipts hit the LLM
+    const force = req.body?.force === true;
+    const toParse = m.images.filter(i => force || !i.parsed || i.parsed.error);
     if (toParse.length > 0) {
       console.log(`Report "${m.name}": parsing ${toParse.length} of ${m.images.length} receipt(s)`);
       const buffers = await Promise.all(toParse.map(async i => ({

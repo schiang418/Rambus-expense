@@ -279,6 +279,7 @@
         <button class="btn btn-outline" onclick="document.getElementById('cameraInput').click()">📷 Take Photo</button>
         <button class="btn btn-outline" onclick="document.getElementById('reportFileInput').click()">🗂 Add ZIP / Images</button>
         <button class="btn btn-primary" id="processBtn" onclick="processReport()">🔍 Process All &amp; Review</button>
+        <button class="btn btn-outline btn-sm" id="reparseBtn" onclick="processReport(true)" title="Send every receipt through the AI again (ignores cached results)">↻ Re-parse all</button>
       </div>
       <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none"
              onchange="uploadToReport(this)" />
@@ -513,20 +514,27 @@ async function deleteReport() {
   }
 }
 
-async function processReport() {
+async function processReport(force = false) {
   if (!activeReport || !activeReport.images.length) return;
+  if (force && !confirm(`Re-parse all ${activeReport.images.length} receipt(s) with AI? Cached results will be replaced.`)) return;
   const btn  = document.getElementById('processBtn');
   const prog = document.getElementById('reportProgress');
   const txt  = document.getElementById('reportProgressText');
   btn.disabled = true;
   prog.style.display = 'block';
-  const unparsed = activeReport.images.filter(i => !i.parsed || i.parsed.error).length;
+  const unparsed = force
+    ? activeReport.images.length
+    : activeReport.images.filter(i => !i.parsed || i.parsed.error).length;
   txt.textContent = unparsed
-    ? `Parsing ${unparsed} new receipt(s) with AI vision… (already-parsed ones are cached)`
+    ? `Parsing ${unparsed} receipt(s) with AI vision…${force ? '' : ' (already-parsed ones are cached)'}`
     : 'Loading parsed receipts…';
 
   try {
-    const data = await api(`/api/reports/${activeReport.slug}/parse`, { method: 'POST' });
+    const data = await api(`/api/reports/${activeReport.slug}/parse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force })
+    });
     txt.textContent = `✓ ${data.receipts.length} receipt(s) ready (${data.parsedNow} newly parsed, ${data.fromCache} from cache)`;
     receipts = data.receipts;
     receiptsSource = 'report';
