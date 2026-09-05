@@ -152,7 +152,8 @@ async function parseImagesBatch(images) {
           amount: parsed.amount,
           merchant: parsed.merchant,
           category: parsed.category || 'Others',
-          description: parsed.description || parsed.merchant
+          description: parsed.description || parsed.merchant,
+          original: parsed.original || ''
         };
       } catch (e) {
         console.error(`Failed to parse ${img.name}: [${e.response?.status}] ${e.response?.data ? JSON.stringify(e.response.data) : e.message}`);
@@ -188,7 +189,8 @@ Return ONLY a valid JSON object with exactly these fields (no markdown, no expla
   "amount": <number, total amount paid in TWD, no currency symbol>,
   "merchant": "merchant/business name as printed on the receipt (Chinese is fine)",
   "category": "one of: Airfare | Transportation | Lodging | Travel-Other | Meals | Entertainment | Telephone | Office Supplies | Others",
-  "description": "concise English summary of what was purchased, 3-8 words"
+  "description": "concise English summary of what was purchased, 3-8 words",
+  "original": "the item/purpose as printed on the receipt in its own language, 2-8 words (e.g. 停車費, 95無鉛汽油 43.48公升, 7月電信帳單); empty string if the receipt is already in English"
 }
 
 Date rules:
@@ -472,6 +474,7 @@ app.post('/api/reports/:slug/parse', async (req, res) => {
       merchant: i.parsed?.merchant || i.originalName,
       category: i.parsed?.category || 'Others',
       description: i.parsed?.description || '',
+      original: i.parsed?.original || '',
       ...(i.parsed?.error ? { error: i.parsed.error } : {})
     })));
 

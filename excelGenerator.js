@@ -164,11 +164,16 @@ export async function generateExcel(employeeName, receipts) {
       dateCell.value = r.date || '';
     }
 
-    // Explanation: "merchant - description" like the reference layout
+    // Explanation: English summary first, then the receipt's own wording,
+    // e.g. "parking fee - 新竹停車場 停車費" or "hotel stay - Hyatt House San Jose"
     const merchant = (r.merchant || '').trim();
     const desc = (r.description || '').trim();
+    const original = (r.original || '').trim();
+    const local = original && original !== merchant && !merchant.includes(original)
+      ? `${merchant} ${original}`.trim()
+      : merchant;
     wsTWD.getCell(row, 2).value =
-      merchant && desc && desc !== merchant ? `${merchant} - ${desc}` : (desc || merchant);
+      desc && local && desc !== local ? `${desc} - ${local}` : (desc || local);
     wsTWD.getCell(row, 3).value = r.ref;
     wsTWD.getCell(row, 4).value = { formula: `SUM(E${row}:M${row})` };
     const catCol = CATEGORY_COL[r.category] || 13;
