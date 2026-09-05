@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import { generateExcel } from './excelGenerator.js';
 import { normalizeDate, isIsoDate } from './dateUtils.js';
+import { applyFx, getRate, normCurrency } from './fx.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -150,6 +151,7 @@ async function parseImagesBatch(images) {
         return {
           date: westernDate || parsed.date || '',
           amount: parsed.amount,
+          currency: normCurrency(parsed.currency),
           merchant: parsed.merchant,
           category: parsed.category || 'Others',
           description: parsed.description || parsed.merchant,
@@ -186,12 +188,19 @@ Analyze this receipt image and extract the following information.
 Return ONLY a valid JSON object with exactly these fields (no markdown, no explanation):
 {
   "date": "YYYY-MM-DD",
-  "amount": <number, total amount paid in TWD, no currency symbol>,
+  "amount": <number, total amount paid, in the currency printed on the receipt — never convert to another currency>,
+  "currency": "TWD | USD | RMB",
   "merchant": "merchant/business name as printed on the receipt (Chinese is fine)",
   "category": "one of: Airfare | Transportation | Lodging | Travel-Other | Meals | Entertainment | Telephone | Office Supplies | Others",
   "description": "concise English summary of what was purchased, 3-8 words",
   "original": "the item/purpose as printed on the receipt in its own language, 2-8 words (e.g. 停車費, 95無鉛汽油 43.48公升, 7月電信帳單); empty string if the receipt is already in English"
 }
+
+Currency rules:
+- Taiwan receipts (NT$, 元, 新台幣, TWD, Taiwanese merchants, 統一發票) → "TWD".
+- United States receipts ($ amounts, US addresses/merchants) → "USD".
+- Mainland China receipts (¥, 人民币, RMB, CNY, Alipay/WeChat Pay in China, simplified Chinese) → "RMB".
+- Keep "amount" exactly as printed in that currency (e.g. a $200.00 US receipt → amount 200, currency "USD").
 
 Date rules:
 - Always output ISO format YYYY-MM-DD.
@@ -284,6 +293,7 @@ app.post('/api/parse', upload.array('files', 200), async (req, res) => {
       return a.date.localeCompare(b.date);
     });
 
+    await applyFx(results);
     console.log(`Done: ${results.length} receipts parsed`);
     res.json({ receipts: results, totalFiles: req.files.length, totalImages: images.length });
   } catch (err) {
@@ -471,6 +481,7 @@ app.post('/api/reports/:slug/parse', async (req, res) => {
       imageBase64: (await fsp.readFile(path.join(reportDir(slug), i.storedName))).toString('base64'),
       date: i.parsed?.date || '',
       amount: i.parsed?.amount ?? 0,
+      currency: normCurrency(i.parsed?.currency),
       merchant: i.parsed?.merchant || i.originalName,
       category: i.parsed?.category || 'Others',
       description: i.parsed?.description || '',
@@ -483,6 +494,7 @@ app.post('/api/reports/:slug/parse', async (req, res) => {
       if (!b.date) return -1;
       return a.date.localeCompare(b.date);
     });
+    await applyFx(receipts);
 
     res.json({
       receipts,
@@ -497,6 +509,18 @@ app.post('/api/reports/:slug/parse', async (req, res) => {
   }
 });
 
+// ─── GET /api/fx?currency=USD&date=2026-08-05 ─────────────────────────────────
+// Marked-up TWD rate for a currency on a date (used by the review table when
+// a row's currency or date is edited)
+app.get('/api/fx', async (req, res) => {
+  try {
+    const info = await getRate(req.query.currency, normalizeDate(req.query.date));
+    res.json(info);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ─── POST /api/generate ───────────────────────────────────────────────────────
 app.post('/api/generate', async (req, res) => {
   try {
@@ -505,6 +529,8 @@ app.post('/api/generate', async (req, res) => {
       return res.status(400).json({ error: 'No receipts provided' });
     }
 
+    // Recompute TWD amounts server-side (honours manual rate overrides from the table)
+    await applyFx(receipts);
     const excelBuffer = await generateExcel(employeeName || 'Samuel Chiang', receipts);
 
     // When generating from a cumulative report, stamp it as generated

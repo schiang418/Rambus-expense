@@ -146,6 +146,28 @@ export async function generateExcel(employeeName, receipts) {
   wsTWD.getCell(5, 2).value = employeeName || 'Samuel Chiang';
   wsTWD.getCell(5, 10).value = `${slashDate(firstDate)}-${slashDate(lastDate)}`;
 
+  // ── Currency / Rate box (L2:M3): the marked-up rate(s) applied to foreign receipts
+  const fxUsed = {};
+  for (const r of sorted) {
+    if (r.currency && r.currency !== 'TWD' && r.fxRate) {
+      (fxUsed[r.currency] = fxUsed[r.currency] || new Set()).add(r.fxRate);
+    }
+  }
+  const fxCurrencies = Object.keys(fxUsed);
+  const fmtRates = c => [...fxUsed[c]].sort((a, b) => a - b).map(x => x.toFixed(2)).join(' / ');
+  if (fxCurrencies.length === 0) {
+    wsTWD.getCell(2, 13).value = 'TWD';
+    wsTWD.getCell(3, 13).value = 'N/A';
+  } else if (fxCurrencies.length === 1) {
+    const c = fxCurrencies[0];
+    wsTWD.getCell(2, 13).value = c;
+    // a single rate stays numeric so the template's #,##0.00 format applies
+    wsTWD.getCell(3, 13).value = fxUsed[c].size === 1 ? [...fxUsed[c]][0] : fmtRates(c);
+  } else {
+    wsTWD.getCell(2, 13).value = fxCurrencies.join(' / ');
+    wsTWD.getCell(3, 13).value = fxCurrencies.map(c => `${c} ${fmtRates(c)}`).join(' / ');
+  }
+
   // ── Write data rows ────────────────────────────────────────────────────────
   sorted.forEach((r, i) => {
     const row = DATA_START + i;
@@ -172,12 +194,17 @@ export async function generateExcel(employeeName, receipts) {
     const local = original && original !== merchant && !merchant.includes(original)
       ? `${merchant} ${original}`.trim()
       : merchant;
-    wsTWD.getCell(row, 2).value =
-      desc && local && desc !== local ? `${desc} - ${local}` : (desc || local);
+    const explanation = desc && local && desc !== local ? `${desc} - ${local}` : (desc || local);
+    // Foreign receipts: note the original amount and the rate used, e.g. "(USD 200.00 @ 32.76)"
+    const isForeign = r.currency && r.currency !== 'TWD';
+    const fxNote = isForeign
+      ? ` (${r.currency} ${(Number(r.amount) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} @ ${r.fxRate ? r.fxRate.toFixed(2) : 'rate unavailable'})`
+      : '';
+    wsTWD.getCell(row, 2).value = explanation + fxNote;
     wsTWD.getCell(row, 3).value = r.ref;
     wsTWD.getCell(row, 4).value = { formula: `SUM(E${row}:M${row})` };
     const catCol = CATEGORY_COL[r.category] || 13;
-    wsTWD.getCell(row, catCol).value = Number(r.amount) || 0;
+    wsTWD.getCell(row, catCol).value = Number(isForeign ? r.amountTwd : r.amount) || 0;
   });
 
   // ── Write subtotal row ─────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ A web app that parses receipt images (JPEG or ZIP) using AI vision, lets you rev
 - **Quick mode** — one-shot upload → parse → review → download, no storage.
 - **iPhone-ready (PWA)** — open the app in Safari on your phone, tap Share → **Add to Home Screen**, and it installs like an app: snap receipt photos with the camera button, they upload straight into the open report, and you can generate the Excel from the phone too. Desktop and phone always see the same reports because everything lives on the server.
 - AI-powered extraction of date, amount, merchant, and category from each receipt
+- **Foreign-currency receipts (USD / RMB)** — the AI reports the currency, the server looks up the TWD exchange rate for the receipt date (Bank of Taiwan when reachable, otherwise a keyless daily-rate dataset, cached on the volume), adds a 1.5% card-fee markup, converts the amount to TWD, notes the original amount and rate in the Explanation, and fills the Currency/Rate box in the Excel header. Rates can be overridden per row in the review table.
 - Automatic ROC (Republic of China) calendar date conversion (e.g. 115年 → 2026)
 - Editable expense table — correct any field before export
 - Generates the exact Rambus Taiwan Excel template (TWD tab + Receipts tab with embedded images)
@@ -21,7 +22,8 @@ A web app that parses receipt images (JPEG or ZIP) using AI vision, lets you rev
 | `FORGE_API_KEY` | API key for the LLM vision model |
 | `FORGE_MODEL` | Vision model to use (default: `gpt-5.4`) |
 | `PARSE_CONCURRENCY` | Receipts parsed in parallel (default: 3; lower it if you hit 429 rate limits) |
-| `DATA_DIR` | Directory for stored reports — set to the Railway volume mount path, e.g. `/data` |
+| `DATA_DIR` | Directory for stored reports and the exchange-rate cache — set to the Railway volume mount path, e.g. `/data` |
+| `FX_MARKUP` | Markup added to the bank exchange rate for card fees (default `0.015` = 1.5%) |
 | `PORT` | Server port (Railway sets this automatically) |
 
 ## Railway Deployment
