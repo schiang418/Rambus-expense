@@ -49,14 +49,20 @@ function applyStyle(dstCell, style) {
   }
 }
 
-// Resize image buffer to fill cell while preserving aspect ratio
+// Resize image buffer to fill cell while preserving aspect ratio.
+// .rotate() with no argument bakes in the EXIF orientation — phone photos are
+// usually stored sideways with a rotation tag that Excel ignores.
 async function resizeToFill(buffer, cellW, cellH) {
   try {
     const meta = await sharp(buffer).metadata();
-    const scale = Math.min(cellW / meta.width, cellH / meta.height);
-    const newW = Math.round(meta.width * scale);
-    const newH = Math.round(meta.height * scale);
+    const sideways = meta.orientation >= 5 && meta.orientation <= 8;
+    const srcW = sideways ? meta.height : meta.width;
+    const srcH = sideways ? meta.width : meta.height;
+    const scale = Math.min(cellW / srcW, cellH / srcH);
+    const newW = Math.round(srcW * scale);
+    const newH = Math.round(srcH * scale);
     const resized = await sharp(buffer)
+      .rotate()
       .resize(newW, newH, { fit: 'fill' })
       .jpeg({ quality: 85 })
       .toBuffer();
@@ -237,8 +243,10 @@ export async function generateExcel(employeeName, receipts) {
     wsRec.getRow(r).height = RECEIPT_ROW_HEIGHT;
   }
 
-  // Clear existing images
+  // Drop the template's own receipt images: clear the sheet anchors AND the
+  // workbook media list, otherwise the old pictures ride along in every file
   if (wsRec._images) wsRec._images.length = 0;
+  wb.media.length = 0;
 
   // Embed receipt images resized to fill each cell
   for (let i = 0; i < sorted.length; i++) {

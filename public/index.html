@@ -23,8 +23,9 @@
     header {
       background: #1a1a2e;
       color: #fff;
-      padding: 0 2rem;
-      height: 60px;
+      /* keep content below the iPhone status bar in full-screen (home screen) mode */
+      padding: env(safe-area-inset-top, 0px) 2rem 0;
+      height: calc(60px + env(safe-area-inset-top, 0px));
       display: flex;
       align-items: center;
       gap: 1rem;
@@ -147,14 +148,21 @@
       display: none; position: fixed; inset: 0;
       background: rgba(0,0,0,.75); z-index: 999;
       align-items: center; justify-content: center;
+      /* iOS only delivers tap events to elements that look clickable */
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
     }
     #modal.open { display: flex; }
-    #modal img { max-width: 90vw; max-height: 90vh; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,.5); }
+    #modal img { max-width: 90vw; max-height: 85vh; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,.5); cursor: pointer; }
     #modal .close-btn {
-      position: absolute; top: 1.5rem; right: 1.5rem;
+      position: absolute;
+      top: calc(env(safe-area-inset-top, 0px) + 1rem); right: 1rem;
       background: #fff; border: none; border-radius: 50%;
-      width: 36px; height: 36px; font-size: 1.2rem; cursor: pointer;
+      width: 44px; height: 44px; font-size: 1.3rem; cursor: pointer; z-index: 1;
       display: flex; align-items: center; justify-content: center;
+    }
+    #modal .modal-hint {
+      position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
+      color: #cbd5e0; font-size: .85rem; pointer-events: none;
     }
 
     /* Toast */
@@ -359,8 +367,9 @@
 
 <!-- Image modal -->
 <div id="modal">
-  <button class="close-btn" onclick="closeModal()">✕</button>
+  <button class="close-btn" onclick="closeModal()" aria-label="Close">✕</button>
   <img id="modalImg" src="" alt="Receipt" />
+  <span class="modal-hint">Tap anywhere to close</span>
 </div>
 
 <div id="toast"></div>
@@ -786,10 +795,13 @@ function openModalSrc(src) {
   document.getElementById('modalImg').src = src;
   document.getElementById('modal').classList.add('open');
 }
-function closeModal() { document.getElementById('modal').classList.remove('open'); }
-document.getElementById('modal').addEventListener('click', e => {
-  if (e.target === document.getElementById('modal')) closeModal();
-});
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  document.getElementById('modalImg').src = '';
+}
+// Any tap inside the overlay closes it (background, the image, or the ✕)
+document.getElementById('modal').addEventListener('click', closeModal);
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 function showToast(msg) {

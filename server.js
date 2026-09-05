@@ -4,6 +4,7 @@ import AdmZip from 'adm-zip';
 import axios from 'axios';
 import fs from 'fs';
 import fsp from 'fs/promises';
+import sharp from 'sharp';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
@@ -88,8 +89,24 @@ function reportSummary(m) {
   };
 }
 
+// Phone photos carry an EXIF orientation tag instead of upright pixels.
+// Bake the rotation in once so the stored file, the LLM input, and the Excel
+// embed all agree on which way is up.
+async function normalizeOrientation(img) {
+  try {
+    const meta = await sharp(img.buffer).metadata();
+    if (meta.orientation && meta.orientation > 1) {
+      img.buffer = await sharp(img.buffer).rotate().jpeg({ quality: 92 }).toBuffer();
+      img.mimeType = 'image/jpeg';
+    }
+  } catch {
+    // not a format sharp understands — leave it as-is
+  }
+  return img;
+}
+
 // Collect receipt images from uploaded files (ZIPs are expanded)
-function extractImages(files) {
+async function extractImages(files) {
   const images = [];
   for (const file of files) {
     const ext = path.extname(file.originalname).toLowerCase();
@@ -114,7 +131,7 @@ function extractImages(files) {
       });
     }
   }
-  return images;
+  return Promise.all(images.map(normalizeOrientation));
 }
 
 // Parse images through the LLM in small parallel batches.
@@ -258,7 +275,7 @@ app.post('/api/parse', upload.array('files', 200), async (req, res) => {
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    const images = extractImages(req.files);
+    const images = await extractImages(req.files);
     if (images.length === 0) {
       return res.status(400).json({ error: 'No receipt images found in the uploaded files' });
     }
@@ -358,14 +375,15 @@ app.post('/api/reports/:slug/upload', upload.array('files', 200), async (req, re
     const m = slug && await loadManifest(slug);
     if (!m) return res.status(404).json({ error: 'Report not found' });
 
-    const images = extractImages(req.files || []);
+    const images = await extractImages(req.files || []);
     if (images.length === 0) {
       return res.status(400).json({ error: 'No receipt images found in the uploaded files' });
     }
 
     for (const img of images) {
       const id = uuidv4();
-      const ext = path.extname(img.name).toLowerCase() || '.jpg';
+      // Stored extension must match the (possibly re-encoded) bytes, not the upload name
+      const ext = Object.entries(MIME_BY_EXT).find(([, m]) => m === img.mimeType)?.[0] || '.jpg';
       const storedName = `${id}${ext}`;
       await fsp.writeFile(path.join(reportDir(slug), storedName), img.buffer);
       m.images.push({
